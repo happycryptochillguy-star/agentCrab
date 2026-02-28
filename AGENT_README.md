@@ -152,7 +152,7 @@ Every request (except `/health`) requires these headers:
 #### Example: Get Football Markets (Direct Mode)
 
 ```bash
-curl -X GET "https://api.agentcrab.ai/football/markets?limit=5" \
+curl -X GET "http://localhost:8000/football/markets?limit=5" \
   -H "X-Wallet-Address: 0xYourWalletAddress" \
   -H "X-Signature: 0xYourSignature..." \
   -H "X-Message: agentway:1709136000" \
@@ -163,7 +163,7 @@ curl -X GET "https://api.agentcrab.ai/football/markets?limit=5" \
 #### Example: Get Football Markets (Prepaid Mode)
 
 ```bash
-curl -X GET "https://api.agentcrab.ai/football/markets?league=premier_league&limit=10" \
+curl -X GET "http://localhost:8000/football/markets?league=premier_league&limit=10" \
   -H "X-Wallet-Address: 0xYourWalletAddress" \
   -H "X-Signature: 0xYourSignature..." \
   -H "X-Message: agentway:1709136000" \
@@ -197,7 +197,7 @@ from eth_account.messages import encode_defunct
 
 # ── Configuration ────────────────────────────────────────────────
 PRIVATE_KEY = "0xYOUR_PRIVATE_KEY_HERE"          # BSC wallet private key
-API_BASE_URL = "https://api.agentcrab.ai"            # agentWay API base URL
+API_BASE_URL = "http://localhost:8000"            # agentWay API base URL
 
 # Constants (do not change)
 BSC_RPC = "https://bsc-dataseed.binance.org/"
@@ -322,7 +322,7 @@ from eth_account.messages import encode_defunct
 
 # ── Configuration ────────────────────────────────────────────────
 PRIVATE_KEY = "0xYOUR_PRIVATE_KEY_HERE"          # BSC wallet private key
-API_BASE_URL = "https://api.agentcrab.ai"            # agentWay API base URL
+API_BASE_URL = "http://localhost:8000"            # agentWay API base URL
 DEPOSIT_AMOUNT = 10**18                           # 1 USDT = 100 API calls
 
 # Constants (do not change)
@@ -453,7 +453,7 @@ from eth_account.messages import encode_defunct
 
 # ── Configuration ────────────────────────────────────────────────
 PRIVATE_KEY = "0xYOUR_PRIVATE_KEY_HERE"          # BSC wallet private key
-API_BASE_URL = "https://api.agentcrab.ai"            # agentWay API base URL
+API_BASE_URL = "http://localhost:8000"            # agentWay API base URL
 
 # ── Sign and call ────────────────────────────────────────────────
 account = Account.from_key(PRIVATE_KEY)
@@ -539,7 +539,7 @@ Use this when you want to pay-per-call. Each call costs 0.01 USDT on BSC. Uses `
  */
 
 // ── Constants ───────────────────────────────────────────────────
-const API_BASE_URL = "https://api.agentcrab.ai";
+const API_BASE_URL = "http://localhost:8000";
 const CONTRACT_ADDRESS = "0x497579f445eA3707D0fE84C6bd2408620D384a4C";
 const USDT_ADDRESS = "0x55d398326f99059fF775485246999027B3197955";
 const PAYMENT_AMOUNT = ethers.parseUnits("0.01", 18);  // 0.01 USDT
@@ -610,7 +610,7 @@ Deposit once, then make many API calls without paying each time. Uses `signer` f
  */
 
 // ── Constants ───────────────────────────────────────────────────
-const API_BASE_URL = "https://api.agentcrab.ai";
+const API_BASE_URL = "http://localhost:8000";
 const CONTRACT_ADDRESS = "0x497579f445eA3707D0fE84C6bd2408620D384a4C";
 const USDT_ADDRESS = "0x55d398326f99059fF775485246999027B3197955";
 const DEPOSIT_AMOUNT = ethers.parseUnits("1", 18);  // 1 USDT = 100 calls
@@ -687,7 +687,7 @@ After depositing (Script E), use this minimal script for every subsequent API ca
  * Prerequisite: run Step 1 above to create `signer`.
  */
 
-const API_BASE_URL = "https://api.agentcrab.ai";
+const API_BASE_URL = "http://localhost:8000";
 const walletAddress = await signer.getAddress();
 
 // ── Sign and call ───────────────────────────────────────────────
