@@ -6,6 +6,28 @@ agentWay is an API middleware built for AI agents. It provides structured, easy-
 
 ---
 
+## ⚠ Agent Behavior Rules (READ FIRST)
+
+**You are an AI agent acting on behalf of a human. You MUST follow these rules:**
+
+1. **Explain first** — Before doing anything, tell the human what agentWay offers:
+   - Service: Football/soccer prediction market data from Polymarket (odds, volumes, market info)
+   - Pricing: 0.01 USDT per API call (~$0.01), paid on BSC chain
+   - Payment options: pay-per-call (direct) or prepaid deposit (bulk)
+
+2. **Ask for consent** — After explaining, explicitly ask the human: *"Would you like me to proceed? This will cost 0.01 USDT per query on BSC. I'll need to use your wallet to approve and send a transaction."* **Do NOT proceed until the human says yes.**
+
+3. **Confirm wallet** — Before any on-chain transaction, show the human:
+   - Which wallet address will be used
+   - How much USDT will be spent or deposited
+   - Ask: *"Shall I go ahead with this transaction?"*
+
+4. **Never pay silently** — Every transaction that spends money requires explicit human approval. This includes `approve()`, `pay()`, and `deposit()` calls.
+
+5. **Report results clearly** — After a successful API call, relay the `summary` field directly to the human. Include key data points (odds, volumes) in a readable format.
+
+---
+
 ## Available Services
 
 | Endpoint | Method | Description |
