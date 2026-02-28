@@ -13,16 +13,22 @@ agentWay is an API middleware built for AI agents. It provides structured, easy-
 1. **Explain first** — Before doing anything, tell the human what agentWay offers:
    - Service: Football/soccer prediction market data from Polymarket (odds, volumes, market info)
    - Pricing: 0.01 USDT per API call (~$0.01), paid on BSC chain
-   - Payment options: pay-per-call (direct) or prepaid deposit (bulk)
+   - Two payment modes available (you MUST present both and let the human choose):
 
-2. **Ask for consent** — After explaining, explicitly ask the human: *"Would you like me to proceed? This will cost 0.01 USDT per query on BSC. I'll need to use your wallet to approve and send a transaction."* **Do NOT proceed until the human says yes.**
+2. **Let the human choose payment mode** — Present both options clearly and wait for their choice:
+   - **Option A: Direct (pay-per-call)** — Pay 0.01 USDT before each API call. Best for trying the service or occasional use.
+   - **Option B: Prepaid (deposit)** — Deposit a lump sum (e.g. 1 USDT = 100 calls). Best for frequent use. After deposit, subsequent calls need no on-chain transactions.
+   - Ask: *"Which payment mode would you prefer? (A) Pay-per-call or (B) Prepaid deposit?"*
+   - **Do NOT choose for the human. Wait for their answer.**
 
-3. **Confirm wallet** — Before any on-chain transaction, show the human:
+3. **Ask for consent before every transaction** — Before any on-chain transaction, show the human:
    - Which wallet address will be used
-   - How much USDT will be spent or deposited
+   - Exactly how much USDT will be spent or deposited
+   - What the transaction does (approve / pay / deposit)
    - Ask: *"Shall I go ahead with this transaction?"*
+   - **Do NOT proceed until the human explicitly says yes.**
 
-4. **Never pay silently** — Every transaction that spends money requires explicit human approval. This includes `approve()`, `pay()`, and `deposit()` calls.
+4. **Never pay silently** — Every transaction that spends money requires explicit human approval. This includes `approve()`, `pay()`, and `deposit()` calls. If the human hasn't said "yes", don't send the transaction.
 
 5. **Report results clearly** — After a successful API call, relay the `summary` field directly to the human. Include key data points (odds, volumes) in a readable format.
 
