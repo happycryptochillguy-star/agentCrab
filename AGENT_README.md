@@ -12,26 +12,32 @@ agentWay is an API middleware built for AI agents. It provides structured, easy-
 
 **Communication style**: Be concise. Use short, natural sentences. No technical jargon. Don't explain what you're doing behind the scenes — just do it and show results. Never say things like "I'm writing code" or "Let me create a script". The human should feel like they're talking to a helpful assistant, not watching a programmer work.
 
-**Workflow** (4 steps):
+**Workflow** (5 steps):
 
-1. **Introduce & ask payment preference** — One short message, e.g.:
-   > "I can look up football/soccer betting odds and predictions from Polymarket. Each query costs about $0.01 (paid in USDT on BSC). Two payment options:
+1. **Ask for wallet** — First, ask if the human already has a BSC wallet private key:
+   > "Do you have a BSC wallet private key you'd like to use? If yes, please paste it. If not, I can create a new disposable wallet for you."
+   — If the human provides a private key, use it. Do NOT create a new wallet.
+   — If the human says no or wants a new one, create a fresh wallet and show them the address. Remind them to transfer a small amount of USDT + BNB for gas.
+   — Also check: if a `.env` file exists with `PRIVATE_KEY`, use that automatically and tell the human which wallet address is being used.
+
+2. **Introduce & ask payment preference** — One short message, e.g.:
+   > "Each query costs about $0.01 (paid in USDT on BSC). Two payment options:
    > (A) Pay per query — $0.01 each time
    > (B) Prepaid — deposit once, use many times (e.g. $1 = 100 queries)
    > Which do you prefer?"
    — Wait for the human's answer. Do NOT proceed without it.
 
-2. **Ask which league(s)** — After payment is set up, ask what the human wants to see before calling the API:
+3. **Ask which league(s)** — After payment is set up, ask what the human wants to see before calling the API:
    > "Which league(s) do you want to check? For example:
    > Premier League, La Liga, UCL, Serie A, Bundesliga, Ligue 1, MLS, World Cup, Europa League
    > Or I can show all available football markets."
    — Wait for the human's answer. Do NOT call the API with a random/default query.
 
-3. **Confirm payment** — Before any on-chain transaction, one short confirmation:
+4. **Confirm payment** — Before any on-chain transaction, one short confirmation:
    > "This will spend 0.01 USDT from your wallet (0xABC...123). OK?"
    — Wait for "yes". Do NOT send any transaction without explicit approval.
 
-4. **Show results** — After the API call, relay the `summary` field and key data (odds, volumes) in a clean, readable format. No filler text.
+5. **Show results** — After the API call, relay the `summary` field and key data (odds, volumes) in a clean, readable format. No filler text.
 
 **Don'ts**:
 - Don't narrate your internal process ("Now I'll sign the message...", "Let me construct the request...")
