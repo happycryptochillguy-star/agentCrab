@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Header, Query, HTTPException
+from fastapi import APIRouter, Depends, Query
 
+from api.auth import verify_auth_only
 from api.config import settings
-from api.models import SuccessResponse, ErrorResponse, BalanceResponse, VerifyResponse
+from api.models import SuccessResponse, BalanceResponse, VerifyResponse
 from api.services import payment as payment_svc
 from api.services import balance as balance_svc
 
@@ -10,25 +11,14 @@ router = APIRouter(prefix="/payment", tags=["payment"])
 
 @router.get("/balance")
 async def get_balance(
-    x_wallet_address: str = Header(..., alias="X-Wallet-Address"),
-    x_signature: str = Header(..., alias="X-Signature"),
-    x_message: str = Header(..., alias="X-Message"),
+    wallet_address: str = Depends(verify_auth_only),
 ):
     """Get prepaid balance for a wallet."""
-    if not payment_svc.verify_signature(x_wallet_address, x_message, x_signature):
-        raise HTTPException(
-            status_code=401,
-            detail=ErrorResponse(
-                error_code="INVALID_SIGNATURE",
-                message="Signature verification failed. Sign 'agentway:{unix_timestamp}' with your wallet.",
-            ).model_dump(),
-        )
-
-    deposited, consumed, remaining = await balance_svc.get_remaining(x_wallet_address)
+    deposited, consumed, remaining = await balance_svc.get_remaining(wallet_address)
     calls = balance_svc.calls_remaining(remaining)
 
     balance_data = BalanceResponse(
-        wallet_address=x_wallet_address.lower(),
+        wallet_address=wallet_address.lower(),
         total_deposited_wei=str(deposited),
         total_consumed_wei=str(consumed),
         remaining_wei=str(remaining),
@@ -36,9 +26,9 @@ async def get_balance(
     )
 
     if calls > 0:
-        summary = f"Wallet {x_wallet_address[:10]}... has {calls} API calls remaining ({remaining / 10**18:.4f} USDT)."
+        summary = f"Wallet {wallet_address[:10]}... has {calls} API calls remaining ({remaining / 10**18:.4f} USDT)."
     else:
-        summary = f"Wallet {x_wallet_address[:10]}... has no prepaid balance. Deposit USDT to contract {settings.contract_address} on BSC."
+        summary = f"Wallet {wallet_address[:10]}... has no prepaid balance. Deposit USDT to contract {settings.contract_address} on BSC."
 
     return SuccessResponse(
         summary=summary,
@@ -49,31 +39,20 @@ async def get_balance(
 @router.post("/verify")
 async def verify_payment(
     tx_hash: str = Query(..., description="BSC transaction hash to verify"),
-    x_wallet_address: str = Header(..., alias="X-Wallet-Address"),
-    x_signature: str = Header(..., alias="X-Signature"),
-    x_message: str = Header(..., alias="X-Message"),
+    wallet_address: str = Depends(verify_auth_only),
 ):
     """Verify a direct payment transaction."""
-    if not payment_svc.verify_signature(x_wallet_address, x_message, x_signature):
-        raise HTTPException(
-            status_code=401,
-            detail=ErrorResponse(
-                error_code="INVALID_SIGNATURE",
-                message="Signature verification failed. Sign 'agentway:{unix_timestamp}' with your wallet.",
-            ).model_dump(),
-        )
-
-    verified = await payment_svc.verify_direct_payment(tx_hash, x_wallet_address)
+    verified = await payment_svc.verify_direct_payment(tx_hash, wallet_address)
 
     verify_data = VerifyResponse(
         tx_hash=tx_hash,
         verified=verified,
-        wallet_address=x_wallet_address.lower() if verified else None,
+        wallet_address=wallet_address.lower() if verified else None,
         message="Payment verified successfully." if verified else f"Could not verify DirectPayment event. Ensure you called pay() on {settings.contract_address} on BSC.",
     )
 
     if verified:
-        summary = f"Transaction {tx_hash[:10]}... verified. DirectPayment from {x_wallet_address[:10]}... confirmed."
+        summary = f"Transaction {tx_hash[:10]}... verified. DirectPayment from {wallet_address[:10]}... confirmed."
     else:
         summary = f"Transaction {tx_hash[:10]}... could NOT be verified. Check that pay() was called on the correct contract."
 

@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Script, console} from "forge-std/Script.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import {AgentWayPayment} from "../src/AgentWayPayment.sol";
+import {AgentCrabPayment} from "../src/AgentCrabPayment.sol";
 
 contract DeployScript is Script {
     // BSC USDT (18 decimals)
@@ -18,7 +18,7 @@ contract DeployScript is Script {
         vm.startBroadcast(deployerPrivateKey);
 
         // Deploy implementation
-        AgentWayPayment impl = new AgentWayPayment();
+        AgentCrabPayment impl = new AgentCrabPayment();
         console.log("Implementation:", address(impl));
 
         // Deploy proxy with initialize call

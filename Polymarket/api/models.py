@@ -15,7 +15,7 @@ class ErrorResponse(BaseModel):
     message: str
 
 
-# === Polymarket Models ===
+# === Football Models (legacy) ===
 
 class MarketOutcome(BaseModel):
     outcome: str
@@ -58,3 +58,165 @@ class VerifyResponse(BaseModel):
     verified: bool
     wallet_address: str | None = None
     message: str
+
+
+# === Deposit Models ===
+
+class DepositCreateRequest(BaseModel):
+    polymarket_address: str  # User's Polymarket wallet address on Polygon
+
+
+class DepositAddresses(BaseModel):
+    evm: str | None = None  # EVM deposit address (ETH, Polygon, Arbitrum, Base, BSC, etc.)
+    svm: str | None = None  # Solana deposit address
+    btc: str | None = None  # Bitcoin deposit address
+
+
+class DepositCreateResponse(BaseModel):
+    polymarket_address: str
+    deposit_addresses: DepositAddresses
+    note: str | None = None
+
+
+class WithdrawCreateRequest(BaseModel):
+    polymarket_address: str  # Source Polymarket wallet on Polygon
+    to_chain_id: str  # Destination chain ID (e.g. "56" for BSC, "1" for ETH)
+    to_token_address: str  # Destination token contract address
+    recipient_address: str  # Destination wallet address
+
+
+class WithdrawCreateResponse(BaseModel):
+    deposit_addresses: DepositAddresses
+    note: str | None = None
+
+
+# === General Market Models ===
+
+class GammaEvent(BaseModel):
+    event_id: str
+    title: str
+    slug: str | None = None
+    description: str | None = None
+    markets: list[Market]
+    volume: float | None = None
+    liquidity: float | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+    tags: list[str] | None = None
+    image: str | None = None
+
+
+class GammaMarketDetail(BaseModel):
+    market_id: str
+    question: str
+    description: str | None = None
+    market_slug: str | None = None
+    condition_id: str | None = None
+    outcomes: list[MarketOutcome]
+    volume: float | None = None
+    liquidity: float | None = None
+    end_date: str | None = None
+    active: bool = True
+    closed: bool = False
+    tags: list[str] | None = None
+    image: str | None = None
+
+
+# === Orderbook Models ===
+
+class OrderbookLevel(BaseModel):
+    price: str
+    size: str
+
+
+class Orderbook(BaseModel):
+    token_id: str
+    bids: list[OrderbookLevel]
+    asks: list[OrderbookLevel]
+    best_bid: str | None = None
+    best_ask: str | None = None
+    spread: str | None = None
+    midpoint: str | None = None
+
+
+class PriceSummary(BaseModel):
+    token_id: str
+    best_bid: str | None = None
+    best_ask: str | None = None
+    midpoint: str | None = None
+    spread: str | None = None
+    last_trade_price: str | None = None
+
+
+# === Positions Models ===
+
+class Position(BaseModel):
+    market_slug: str | None = None
+    question: str | None = None
+    outcome: str
+    token_id: str
+    size: str
+    avg_price: str | None = None
+    current_price: str | None = None
+    pnl: str | None = None
+    pnl_percent: str | None = None
+
+
+class Trade(BaseModel):
+    trade_id: str | None = None
+    market_slug: str | None = None
+    outcome: str | None = None
+    side: str
+    size: str
+    price: str
+    timestamp: str | None = None
+
+
+class Activity(BaseModel):
+    type: str  # TRADE, SPLIT, MERGE, REDEEM
+    token_id: str | None = None
+    amount: str | None = None
+    timestamp: str | None = None
+    tx_hash: str | None = None
+
+
+# === Trading Models ===
+
+class OrderRequest(BaseModel):
+    token_id: str
+    side: str  # BUY or SELL
+    size: float
+    price: float
+    order_type: str = "GTC"  # GTC, GTD, FOK, FAK
+    expiration: str | None = None  # For GTD orders
+
+
+class OrderResponse(BaseModel):
+    order_id: str
+    status: str
+    token_id: str
+    side: str
+    size: str
+    price: str
+    order_type: str
+
+
+class CancelRequest(BaseModel):
+    order_id: str
+
+
+class BatchCancelRequest(BaseModel):
+    order_ids: list[str] | None = None
+    market: str | None = None  # Cancel all orders in a market
+
+
+# === Leaderboard Models ===
+
+class LeaderboardEntry(BaseModel):
+    rank: int
+    address: str
+    display_name: str | None = None
+    volume: str | None = None
+    pnl: str | None = None
+    positions_count: int | None = None
+    trades_count: int | None = None

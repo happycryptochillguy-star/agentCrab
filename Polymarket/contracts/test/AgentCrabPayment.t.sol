@@ -3,11 +3,11 @@ pragma solidity ^0.8.24;
 
 import {Test, console} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import {AgentWayPayment} from "../src/AgentWayPayment.sol";
+import {AgentCrabPayment} from "../src/AgentCrabPayment.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 
-contract AgentWayPaymentTest is Test {
-    AgentWayPayment public payment;
+contract AgentCrabPaymentTest is Test {
+    AgentCrabPayment public payment;
     MockERC20 public usdt;
 
     address public owner = address(0x1);
@@ -19,10 +19,10 @@ contract AgentWayPaymentTest is Test {
     function setUp() public {
         usdt = new MockERC20("Tether USD", "USDT", 18);
 
-        AgentWayPayment impl = new AgentWayPayment();
+        AgentCrabPayment impl = new AgentCrabPayment();
         bytes memory initData = abi.encodeCall(impl.initialize, (address(usdt), owner));
         ERC1967Proxy proxy = new ERC1967Proxy(address(impl), initData);
-        payment = AgentWayPayment(address(proxy));
+        payment = AgentCrabPayment(address(proxy));
 
         // Fund users
         usdt.mint(user1, 100 ether);
@@ -73,7 +73,7 @@ contract AgentWayPaymentTest is Test {
         usdt.approve(address(payment), amount);
 
         vm.expectEmit(true, false, false, true);
-        emit AgentWayPayment.Deposited(user1, amount);
+        emit AgentCrabPayment.Deposited(user1, amount);
         payment.deposit(amount);
         vm.stopPrank();
     }
@@ -114,7 +114,7 @@ contract AgentWayPaymentTest is Test {
         usdt.approve(address(payment), PAYMENT_AMOUNT);
 
         vm.expectEmit(true, false, false, true);
-        emit AgentWayPayment.DirectPayment(user1, PAYMENT_AMOUNT);
+        emit AgentCrabPayment.DirectPayment(user1, PAYMENT_AMOUNT);
         payment.pay();
         vm.stopPrank();
     }
@@ -173,7 +173,7 @@ contract AgentWayPaymentTest is Test {
 
         vm.prank(owner);
         vm.expectEmit(true, false, false, true);
-        emit AgentWayPayment.Withdrawn(owner, 1 ether);
+        emit AgentCrabPayment.Withdrawn(owner, 1 ether);
         payment.withdraw(1 ether);
     }
 

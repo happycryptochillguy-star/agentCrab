@@ -1,8 +1,9 @@
-# agentWay — AI Middleware for Polymarket
+# agentCrab — AI Middleware for Polymarket
 
-agentWay is an API middleware built for AI agents. It provides structured, easy-to-parse access to Polymarket football/soccer prediction markets. Every response includes a `summary` field — a natural language sentence you can relay directly to the human you're assisting.
+agentCrab turns any AI agent into a full-featured Polymarket assistant. Market search, deposits, orderbooks, positions, trading — all through simple HTTP requests. Every response includes a `summary` field you can relay directly to the human.
 
 **Pricing**: 0.01 USDT per API call, paid on BSC (Binance Smart Chain).
+**API Base URL**: `http://localhost:8000`
 
 ---
 
@@ -10,62 +11,93 @@ agentWay is an API middleware built for AI agents. It provides structured, easy-
 
 **You are an AI agent acting on behalf of a human. Follow these rules strictly.**
 
-**Communication style**: Be concise. Use short, natural sentences. No technical jargon. Don't explain what you're doing behind the scenes — just do it and show results. Never say things like "I'm writing code" or "Let me create a script". The human should feel like they're talking to a helpful assistant, not watching a programmer work.
+**Communication style**: Be concise. Use short, natural sentences. No technical jargon. Don't explain what you're doing behind the scenes — just do it and show results. Never say things like "I'm writing code" or "Let me construct a request". The human should feel like they're talking to a Polymarket assistant, not watching a programmer work.
 
-**Workflow**:
+**Don'ts**:
+- Don't narrate your internal process ("Now I'll sign the message...", "Let me construct the request...")
+- Don't show raw code, raw JSON, or technical logs unless the human asks
+- Don't repeat information the human already knows
+- Don't add disclaimers, caveats, or unnecessary warnings
+- Don't skip payment confirmation for on-chain transactions — every transaction needs a "yes"
 
-**Step 1 — Wallet setup**
+---
 
-- First check: if a `.env` file exists with `PRIVATE_KEY`, use it automatically. Tell the human: "Using wallet 0xABC...123 from your .env file."
-- If no `.env`, ask: "Do you have a BSC wallet private key? If yes, paste it here. If not, I'll create a new one."
-- If the human provides a key, use it. Do NOT create a new wallet.
-- Only create a new wallet if the human explicitly asks for one. Remind them to transfer USDT + BNB for gas.
+## Complete Workflow (follow in order)
 
-**Step 2 — Payment setup** (ask, then set up)
+### Step 1 — Wallet Setup
 
-Tell the human:
-> "Each query costs $0.01 USDT on BSC. Two options:
+The human needs a BSC wallet. This is used for both paying agentCrab fees and holding funds.
+
+**Check for existing wallet**:
+- If the human already provided a private key (in their message, .env file, or earlier in conversation), use it. Tell them: "Using wallet 0xABC...123."
+- If no key available, ask:
+
+> "Do you have a BSC wallet private key? If yes, paste it here. If not, I'll create a new one for you."
+
+**If the human says they don't have one**, create a new wallet:
+
+```python
+from eth_account import Account
+acct = Account.create()
+private_key = acct.key.hex()   # Save this — it's the master key
+address = acct.address
+```
+
+Then tell the human:
+> "I created a new wallet for you:
+> Address: 0xABC...123
+> Private key: 0x... (save this somewhere safe!)
+> You'll need to transfer some USDT + a tiny bit of BNB (for gas) to this address before we can proceed."
+
+**Wait for the human to confirm they have USDT + BNB on this wallet before continuing.**
+
+### Step 2 — agentCrab Payment Setup
+
+Every agentCrab API call costs 0.01 USDT on BSC. Ask the human:
+
+> "Each API query costs $0.01 USDT on BSC. Two options:
 > (A) Pay per query — $0.01 each time
 > (B) Prepaid — deposit once, use many times (e.g. $1 = 100 queries)
 > Which do you prefer?"
 
-Wait for the answer. Then follow the chosen path:
+Wait for their answer. Then:
 
-- **If Direct (A)**: No setup needed now. Payment happens per-query in Step 4.
+- **If Direct (A)**: No setup needed now. You'll call `pay()` before each API call.
 - **If Prepaid (B)**:
-  1. Check existing balance via `GET /payment/balance`.
-  2. If balance > 0, tell the human: "You already have X calls remaining. No deposit needed."
-  3. If balance = 0, ask how much to deposit (suggest $1 = 100 calls). Get confirmation: "Deposit 1 USDT from your wallet? OK?"
-  4. On "yes": execute `approve()` + `deposit()` on-chain, then wait ~15s for the scanner.
+  1. Check existing balance: `GET /payment/balance`
+  2. If balance > 0, tell them: "You already have X calls remaining."
+  3. If balance = 0, ask how much to deposit (suggest $1 = 100 calls). Get confirmation.
+  4. On "yes": execute `approve()` + `deposit()` on the BSC contract (see Payment Reference below), wait ~15s for the scanner.
   5. Confirm: "Deposit complete. You now have X calls available."
 
-**Step 3 — Ask which league(s)**
+### Step 3 — Polymarket Deposit (Fund Trading Account)
 
-> "Which league(s) do you want to check?
-> Premier League, La Liga, UCL, Serie A, Bundesliga, Ligue 1, MLS, World Cup, Europa League
-> Or I can show all available football markets."
+Now ask about funding their Polymarket trading account:
 
-Wait for the answer. Do NOT call the API with a random/default query.
+> "Do you want to deposit funds to Polymarket for trading? If yes, how much USDT?"
 
-**Step 4 — Query & payment**
+If they say no, skip to Step 4. If they say yes:
 
-- **Direct mode**: Confirm first ("This will spend 0.01 USDT. OK?"), then execute `approve()` + `pay()` on-chain, then call the API with the tx hash.
-- **Prepaid mode**: No confirmation needed — just call the API. Balance is deducted automatically (0.01 USDT per call).
+1. The human's Polymarket wallet address = the same wallet address (Polymarket uses the same EVM address on Polygon).
+2. Call `POST /deposit/create` with their address to get a deposit address.
+3. Tell the human: "Send [amount] USDT to deposit address 0x... OK?"
+4. On "yes": sign a standard USDT transfer from their wallet to the deposit address.
+5. Tell them: "Transfer sent! Polymarket will bridge the funds to your account automatically. This may take a few minutes."
 
-**Step 5 — Show results**
+### Step 4 — Ready to Use
 
-Relay the `summary` field and key data (odds, volumes) in a clean, readable format. No filler text.
+Now the human is fully set up. Ask what they want to do:
 
-**Subsequent queries** (same session):
+> "You're all set! What would you like to do?
+> - Search prediction markets (politics, sports, crypto, etc.)
+> - Check odds on a specific event
+> - View the leaderboard
+> - Place a trade
+> - Check your positions/P&L"
 
-Skip steps 1-2. Go directly to Step 3 (ask league) → Step 4 (query) → Step 5 (results). For prepaid users, no payment confirmation is needed as long as balance remains.
+### Subsequent Interactions
 
-**Don'ts**:
-- Don't narrate your internal process ("Now I'll sign the message...", "Let me construct the request...")
-- Don't show raw code, raw JSON, or technical logs to the human unless they ask
-- Don't repeat information the human already knows
-- Don't add disclaimers, caveats, or unnecessary warnings
-- Don't skip the payment confirmation step for on-chain transactions — every transaction needs a "yes"
+Skip Steps 1-3. Go directly to whatever the human asks. For prepaid users, no payment confirmation is needed — balance is deducted automatically.
 
 ---
 
@@ -73,669 +105,212 @@ Skip steps 1-2. Go directly to Step 3 (ask league) → Step 4 (query) → Step 5
 
 Call `GET /agent/capabilities` to get a complete, machine-readable description of all endpoints, parameters, authentication, payment methods, error codes, and rate limits. **This endpoint is free and requires no authentication.**
 
-Always call this endpoint first when starting a new session. It replaces the need to re-read this README for API details.
+Always call this endpoint first when starting a new session.
 
 ---
 
-## Quick Start for Agents
+## Technical Reference
 
-### Step 1: Prerequisites
+### Authentication Headers
 
-You need:
-- A BSC (Binance Smart Chain) wallet with a private key
-- USDT on BSC (token: `0x55d398326f99059fF775485246999027B3197955`, 18 decimals)
-- The ability to sign messages (EIP-191 personal_sign) and send BSC transactions
-
-### Step 2: Choose Payment Mode
-
-| Mode | How it works | Best for |
-|------|-------------|----------|
-| **Direct (per-call)** | Call `pay()` on the smart contract before each API call, pass tx hash in header | Occasional usage |
-| **Prepaid** | Deposit USDT once via `deposit()`, balance is tracked off-chain | Frequent usage |
-
-### Step 3: Pay
-
-**Smart Contract Address (BSC)**: `0x497579f445eA3707D0fE84C6bd2408620D384a4C`
-**Chain**: BSC (Chain ID: 56)
-**USDT Address**: `0x55d398326f99059fF775485246999027B3197955`
-
-#### Mode A — Direct Payment (per-call)
-
-1. Approve the contract to spend 0.01 USDT (10^16 wei):
-```
-USDT.approve(CONTRACT_ADDRESS, 10000000000000000)
-```
-
-2. Call `pay()` on the contract:
-```
-AgentWayPayment.pay()
-```
-
-3. Use the transaction hash in your API call (see Step 4).
-
-#### Mode B — Prepaid Deposit
-
-1. Approve the contract to spend your desired deposit amount:
-```
-USDT.approve(CONTRACT_ADDRESS, AMOUNT_IN_WEI)
-```
-
-2. Call `deposit(amount)`:
-```
-AgentWayPayment.deposit(AMOUNT_IN_WEI)
-```
-
-3. Wait ~15 seconds for the background scanner to detect your deposit. Then call the API with `X-Payment-Mode: prepaid`.
-
-#### Contract ABI (minimal)
-
-```json
-[
-  {
-    "inputs": [],
-    "name": "pay",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [{"name": "amount", "type": "uint256"}],
-    "name": "deposit",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [{"name": "user", "type": "address"}],
-    "name": "getBalance",
-    "outputs": [{"name": "", "type": "uint256"}],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [{"name": "user", "type": "address"}],
-    "name": "getDirectPaymentCount",
-    "outputs": [{"name": "", "type": "uint256"}],
-    "stateMutability": "view",
-    "type": "function"
-  }
-]
-```
-
-### Step 4: Call the API
-
-Every request (except `/health`) requires these headers:
+Every paid request requires these headers:
 
 | Header | Description |
 |--------|-------------|
-| `X-Wallet-Address` | Your BSC wallet address (e.g., `0xABC...`) |
-| `X-Signature` | EIP-191 personal_sign signature of the message |
-| `X-Message` | The signed message, format: `agentway:{unix_timestamp}` |
+| `X-Wallet-Address` | BSC wallet address |
+| `X-Signature` | EIP-191 personal_sign of the message |
+| `X-Message` | `agentcrab:{unix_timestamp}` |
 | `X-Payment-Mode` | `direct` or `prepaid` |
-| `X-Tx-Hash` | *(direct mode only)* The BSC transaction hash from calling `pay()` |
+| `X-Tx-Hash` | *(direct mode only)* BSC tx hash from `pay()` |
 
-**Authentication**: Sign the message `agentway:{unix_timestamp}` using EIP-191 personal_sign with your wallet's private key. The timestamp must be within 5 minutes of server time.
-
-#### Example: Get Football Markets (Direct Mode)
-
-```bash
-curl -X GET "http://localhost:8000/football/markets?limit=5" \
-  -H "X-Wallet-Address: 0xYourWalletAddress" \
-  -H "X-Signature: 0xYourSignature..." \
-  -H "X-Message: agentway:1709136000" \
-  -H "X-Payment-Mode: direct" \
-  -H "X-Tx-Hash: 0xYourTxHash..."
-```
-
-#### Example: Get Football Markets (Prepaid Mode)
-
-```bash
-curl -X GET "http://localhost:8000/football/markets?league=premier_league&limit=10" \
-  -H "X-Wallet-Address: 0xYourWalletAddress" \
-  -H "X-Signature: 0xYourSignature..." \
-  -H "X-Message: agentway:1709136000" \
-  -H "X-Payment-Mode: prepaid"
-```
-
----
-
-## Complete Python Examples
-
-> **Dependencies**: `pip install web3 httpx`
->
-> Each script below is **self-contained** — copy-paste and run directly. No assembly required.
-
-### Script A — Direct Payment (Single API Call)
-
-Use this when you want to pay-per-call. Each call costs 0.01 USDT on BSC.
-
+**How to sign**:
 ```python
-"""
-agentWay — Direct Payment Example
-Pay 0.01 USDT per call, then query football markets.
-Dependencies: pip install web3 httpx
-"""
-
 import time
-import httpx
-from web3 import Web3
 from eth_account import Account
 from eth_account.messages import encode_defunct
 
-# ── Configuration ────────────────────────────────────────────────
-PRIVATE_KEY = "0xYOUR_PRIVATE_KEY_HERE"          # BSC wallet private key
-API_BASE_URL = "http://localhost:8000"            # agentWay API base URL
-
-# Constants (do not change)
-BSC_RPC = "https://bsc-dataseed.binance.org/"
-CONTRACT_ADDRESS = "0x497579f445eA3707D0fE84C6bd2408620D384a4C"
-USDT_ADDRESS = "0x55d398326f99059fF775485246999027B3197955"
-PAYMENT_AMOUNT = 10**16  # 0.01 USDT (18 decimals)
-CHAIN_ID = 56
-
-# Minimal ABIs
-ERC20_ABI = [
-    {
-        "inputs": [
-            {"name": "spender", "type": "address"},
-            {"name": "amount", "type": "uint256"},
-        ],
-        "name": "approve",
-        "outputs": [{"name": "", "type": "bool"}],
-        "stateMutability": "nonpayable",
-        "type": "function",
-    },
-    {
-        "inputs": [
-            {"name": "owner", "type": "address"},
-            {"name": "spender", "type": "address"},
-        ],
-        "name": "allowance",
-        "outputs": [{"name": "", "type": "uint256"}],
-        "stateMutability": "view",
-        "type": "function",
-    },
-]
-
-PAYMENT_ABI = [
-    {
-        "inputs": [],
-        "name": "pay",
-        "outputs": [],
-        "stateMutability": "nonpayable",
-        "type": "function",
-    },
-]
-
-# ── Setup ────────────────────────────────────────────────────────
-w3 = Web3(Web3.HTTPProvider(BSC_RPC))
 account = Account.from_key(PRIVATE_KEY)
-wallet_address = account.address
-print(f"Wallet: {wallet_address}")
-
-usdt = w3.eth.contract(address=Web3.to_checksum_address(USDT_ADDRESS), abi=ERC20_ABI)
-contract = w3.eth.contract(address=Web3.to_checksum_address(CONTRACT_ADDRESS), abi=PAYMENT_ABI)
-
-# ── Step 1: Approve USDT (skip if already approved) ─────────────
-allowance = usdt.functions.allowance(wallet_address, CONTRACT_ADDRESS).call()
-if allowance < PAYMENT_AMOUNT:
-    print("Approving USDT spend...")
-    tx = usdt.functions.approve(CONTRACT_ADDRESS, PAYMENT_AMOUNT * 100).build_transaction({
-        "from": wallet_address,
-        "nonce": w3.eth.get_transaction_count(wallet_address),
-        "gas": 60000,
-        "gasPrice": w3.eth.gas_price,
-        "chainId": CHAIN_ID,
-    })
-    signed = account.sign_transaction(tx)
-    tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
-    w3.eth.wait_for_transaction_receipt(tx_hash)
-    print(f"Approved. tx: {tx_hash.hex()}")
-
-# ── Step 2: Call pay() on the contract ───────────────────────────
-print("Calling pay() — 0.01 USDT...")
-tx = contract.functions.pay().build_transaction({
-    "from": wallet_address,
-    "nonce": w3.eth.get_transaction_count(wallet_address),
-    "gas": 100000,
-    "gasPrice": w3.eth.gas_price,
-    "chainId": CHAIN_ID,
-})
-signed = account.sign_transaction(tx)
-pay_tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
-receipt = w3.eth.wait_for_transaction_receipt(pay_tx_hash)
-print(f"Payment confirmed. tx: {pay_tx_hash.hex()}")
-
-# ── Step 3: Sign auth message ────────────────────────────────────
 timestamp = int(time.time())
-message = f"agentway:{timestamp}"
-msg_hash = encode_defunct(text=message)
-signature = account.sign_message(msg_hash).signature.hex()
-
-# ── Step 4: Call the API ─────────────────────────────────────────
-print("Calling /football/markets ...")
-resp = httpx.get(
-    f"{API_BASE_URL}/football/markets",
-    params={"limit": 5},
-    headers={
-        "X-Wallet-Address": wallet_address,
-        "X-Signature": f"0x{signature}",
-        "X-Message": message,
-        "X-Payment-Mode": "direct",
-        "X-Tx-Hash": pay_tx_hash.hex(),
-    },
-)
-data = resp.json()
-print(f"\nStatus: {data.get('status')}")
-print(f"Summary: {data.get('summary')}")
-```
-
-### Script B — Prepaid Deposit (Bulk Usage)
-
-Deposit once, then make many API calls without paying each time.
-
-```python
-"""
-agentWay — Prepaid Deposit Example
-Deposit 1 USDT (= 100 API calls), then query football markets.
-Dependencies: pip install web3 httpx
-"""
-
-import time
-import httpx
-from web3 import Web3
-from eth_account import Account
-from eth_account.messages import encode_defunct
-
-# ── Configuration ────────────────────────────────────────────────
-PRIVATE_KEY = "0xYOUR_PRIVATE_KEY_HERE"          # BSC wallet private key
-API_BASE_URL = "http://localhost:8000"            # agentWay API base URL
-DEPOSIT_AMOUNT = 10**18                           # 1 USDT = 100 API calls
-
-# Constants (do not change)
-BSC_RPC = "https://bsc-dataseed.binance.org/"
-CONTRACT_ADDRESS = "0x497579f445eA3707D0fE84C6bd2408620D384a4C"
-USDT_ADDRESS = "0x55d398326f99059fF775485246999027B3197955"
-CHAIN_ID = 56
-
-# Minimal ABIs
-ERC20_ABI = [
-    {
-        "inputs": [
-            {"name": "spender", "type": "address"},
-            {"name": "amount", "type": "uint256"},
-        ],
-        "name": "approve",
-        "outputs": [{"name": "", "type": "bool"}],
-        "stateMutability": "nonpayable",
-        "type": "function",
-    },
-    {
-        "inputs": [
-            {"name": "owner", "type": "address"},
-            {"name": "spender", "type": "address"},
-        ],
-        "name": "allowance",
-        "outputs": [{"name": "", "type": "uint256"}],
-        "stateMutability": "view",
-        "type": "function",
-    },
-]
-
-PAYMENT_ABI = [
-    {
-        "inputs": [{"name": "amount", "type": "uint256"}],
-        "name": "deposit",
-        "outputs": [],
-        "stateMutability": "nonpayable",
-        "type": "function",
-    },
-]
-
-# ── Setup ────────────────────────────────────────────────────────
-w3 = Web3(Web3.HTTPProvider(BSC_RPC))
-account = Account.from_key(PRIVATE_KEY)
-wallet_address = account.address
-print(f"Wallet: {wallet_address}")
-
-usdt = w3.eth.contract(address=Web3.to_checksum_address(USDT_ADDRESS), abi=ERC20_ABI)
-contract = w3.eth.contract(address=Web3.to_checksum_address(CONTRACT_ADDRESS), abi=PAYMENT_ABI)
-
-# ── Step 1: Approve USDT ────────────────────────────────────────
-allowance = usdt.functions.allowance(wallet_address, CONTRACT_ADDRESS).call()
-if allowance < DEPOSIT_AMOUNT:
-    print(f"Approving {DEPOSIT_AMOUNT / 10**18} USDT...")
-    tx = usdt.functions.approve(CONTRACT_ADDRESS, DEPOSIT_AMOUNT).build_transaction({
-        "from": wallet_address,
-        "nonce": w3.eth.get_transaction_count(wallet_address),
-        "gas": 60000,
-        "gasPrice": w3.eth.gas_price,
-        "chainId": CHAIN_ID,
-    })
-    signed = account.sign_transaction(tx)
-    tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
-    w3.eth.wait_for_transaction_receipt(tx_hash)
-    print(f"Approved. tx: {tx_hash.hex()}")
-
-# ── Step 2: Call deposit() on the contract ───────────────────────
-print(f"Depositing {DEPOSIT_AMOUNT / 10**18} USDT...")
-tx = contract.functions.deposit(DEPOSIT_AMOUNT).build_transaction({
-    "from": wallet_address,
-    "nonce": w3.eth.get_transaction_count(wallet_address),
-    "gas": 100000,
-    "gasPrice": w3.eth.gas_price,
-    "chainId": CHAIN_ID,
-})
-signed = account.sign_transaction(tx)
-deposit_tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
-receipt = w3.eth.wait_for_transaction_receipt(deposit_tx_hash)
-print(f"Deposit confirmed. tx: {deposit_tx_hash.hex()}")
-
-# ── Step 3: Wait for the background scanner ─────────────────────
-print("Waiting 20s for the deposit scanner to pick up the deposit...")
-time.sleep(20)
-
-# ── Step 4: Sign auth message ────────────────────────────────────
-timestamp = int(time.time())
-message = f"agentway:{timestamp}"
-msg_hash = encode_defunct(text=message)
-signature = account.sign_message(msg_hash).signature.hex()
-
-# ── Step 5: Call the API (prepaid mode) ──────────────────────────
-print("Calling /football/markets ...")
-resp = httpx.get(
-    f"{API_BASE_URL}/football/markets",
-    params={"limit": 5},
-    headers={
-        "X-Wallet-Address": wallet_address,
-        "X-Signature": f"0x{signature}",
-        "X-Message": message,
-        "X-Payment-Mode": "prepaid",
-    },
-)
-data = resp.json()
-print(f"\nStatus: {data.get('status')}")
-print(f"Summary: {data.get('summary')}")
-
-# NOTE: After this initial deposit, you only need Script C below
-# for subsequent API calls — no more on-chain transactions needed
-# until your balance runs out.
-```
-
-### Script C — Subsequent Calls (Prepaid, No Payment Needed)
-
-After depositing (Script B), use this minimal script for every subsequent API call. No on-chain transaction required.
-
-```python
-"""
-agentWay — Subsequent API Call (prepaid mode)
-Use this after you've already deposited USDT via Script B.
-Dependencies: pip install web3 httpx
-"""
-
-import time
-import httpx
-from eth_account import Account
-from eth_account.messages import encode_defunct
-
-# ── Configuration ────────────────────────────────────────────────
-PRIVATE_KEY = "0xYOUR_PRIVATE_KEY_HERE"          # BSC wallet private key
-API_BASE_URL = "http://localhost:8000"            # agentWay API base URL
-
-# ── Sign and call ────────────────────────────────────────────────
-account = Account.from_key(PRIVATE_KEY)
-wallet_address = account.address
-
-timestamp = int(time.time())
-message = f"agentway:{timestamp}"
+message = f"agentcrab:{timestamp}"
 signature = account.sign_message(encode_defunct(text=message)).signature.hex()
 
-resp = httpx.get(
-    f"{API_BASE_URL}/football/markets",
-    params={"limit": 10, "league": "premier_league"},
-    headers={
-        "X-Wallet-Address": wallet_address,
-        "X-Signature": f"0x{signature}",
-        "X-Message": message,
+headers = {
+    "X-Wallet-Address": account.address,
+    "X-Signature": f"0x{signature}",
+    "X-Message": message,
+    "X-Payment-Mode": "prepaid",  # or "direct"
+}
+```
+
+### Payment Contract (BSC)
+
+**Address**: `0x497579f445eA3707D0fE84C6bd2408620D384a4C`
+**Chain**: BSC (Chain ID: 56)
+**USDT**: `0x55d398326f99059fF775485246999027B3197955` (18 decimals)
+
+```json
+[
+  {"inputs": [], "name": "pay", "outputs": [], "stateMutability": "nonpayable", "type": "function"},
+  {"inputs": [{"name": "amount", "type": "uint256"}], "name": "deposit", "outputs": [], "stateMutability": "nonpayable", "type": "function"},
+  {"inputs": [{"name": "user", "type": "address"}], "name": "getBalance", "outputs": [{"name": "", "type": "uint256"}], "stateMutability": "view", "type": "function"}
+]
+```
+
+**Direct payment (per call)**:
+```python
+from web3 import Web3
+
+w3 = Web3(Web3.HTTPProvider("https://bsc-dataseed.binance.org/"))
+PAYMENT_AMOUNT = 10**16  # 0.01 USDT
+
+# 1. Approve (one-time, approve more to avoid repeating)
+usdt.functions.approve(CONTRACT, PAYMENT_AMOUNT * 100).build_transaction(...)
+# 2. Pay
+contract.functions.pay().build_transaction(...)
+# 3. Use tx hash in X-Tx-Hash header
+```
+
+**Prepaid deposit**:
+```python
+DEPOSIT_AMOUNT = 10**18  # 1 USDT = 100 calls
+
+# 1. Approve
+usdt.functions.approve(CONTRACT, DEPOSIT_AMOUNT).build_transaction(...)
+# 2. Deposit
+contract.functions.deposit(DEPOSIT_AMOUNT).build_transaction(...)
+# 3. Wait ~15s, then use X-Payment-Mode: prepaid
+```
+
+---
+
+## API Endpoints
+
+### Free (no payment)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | Health check |
+| GET | `/agent/capabilities` | Full API discovery (call this first!) |
+| GET | `/markets/tags` | Polymarket tag categories |
+| GET | `/trading/setup` | L2 credential derivation guide |
+| GET | `/trading/contracts` | Polygon contract addresses |
+| GET | `/deposit/supported-assets` | Supported deposit chains/tokens |
+| GET | `/payment/balance` | Check prepaid balance (auth required) |
+| POST | `/payment/verify` | Verify payment tx (auth required) |
+
+### Paid (0.01 USDT/call)
+
+**Deposits / Withdrawals**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/deposit/create` | Get deposit addresses (EVM/Solana/BTC) |
+| POST | `/deposit/withdraw` | Get withdrawal address for destination chain |
+
+**Market Search**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/markets/search` | Search all categories (query, tag, limit, offset) |
+| GET | `/markets/events/{event_id}` | Event details |
+| GET | `/markets/events/slug/{slug}` | Event by slug |
+| GET | `/markets/{market_id}` | Market details |
+| GET | `/football/markets` | Football markets (league, limit, offset) |
+
+**Orderbook / Prices**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/orderbook/{token_id}` | Full orderbook |
+| POST | `/orderbook/batch` | Batch orderbooks (1 charge) |
+| GET | `/prices/{token_id}` | Price summary |
+| POST | `/prices/batch` | Batch prices (1 charge) |
+
+**Positions / Trades**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/positions` | Your positions + P&L (needs X-Poly-Address) |
+| GET | `/positions/trades` | Your trade history |
+| GET | `/positions/activity` | Your on-chain activity |
+
+**Leaderboard / Other Traders**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/traders/leaderboard` | Top traders |
+| GET | `/traders/{address}/positions` | Another trader's positions |
+| GET | `/traders/{address}/trades` | Another trader's trades |
+
+**Trading** (requires Polymarket L2 headers)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/trading/order` | Place order (limit/market) |
+| DELETE | `/trading/order/{order_id}` | Cancel order |
+| DELETE | `/trading/orders` | Cancel all orders |
+| GET | `/trading/orders` | Open orders |
+
+Trading requires additional headers: `X-Poly-Api-Key`, `X-Poly-Secret`, `X-Poly-Passphrase`, `X-Poly-Address`.
+These are derived once locally — see `GET /trading/setup` for instructions.
+
+---
+
+## Example: Complete First-Time Flow
+
+```python
+"""
+Complete example: wallet setup → agentCrab payment → Polymarket deposit → search markets
+Dependencies: pip install web3 httpx eth-account
+"""
+import time, httpx
+from web3 import Web3
+from eth_account import Account
+from eth_account.messages import encode_defunct
+
+API = "http://localhost:8000"
+BSC_RPC = "https://bsc-dataseed.binance.org/"
+CONTRACT = "0x497579f445eA3707D0fE84C6bd2408620D384a4C"
+USDT = "0x55d398326f99059fF775485246999027B3197955"
+
+# ── Step 1: Use existing key or create wallet ──
+PRIVATE_KEY = "0xUSER_PRIVATE_KEY"  # from user input
+account = Account.from_key(PRIVATE_KEY)
+w3 = Web3(Web3.HTTPProvider(BSC_RPC))
+
+# ── Step 2: Prepaid deposit to agentCrab (1 USDT = 100 API calls) ──
+USDT_ABI = [{"inputs":[{"name":"spender","type":"address"},{"name":"amount","type":"uint256"}],"name":"approve","outputs":[{"name":"","type":"bool"}],"stateMutability":"nonpayable","type":"function"}]
+PAY_ABI = [{"inputs":[{"name":"amount","type":"uint256"}],"name":"deposit","outputs":[],"stateMutability":"nonpayable","type":"function"}]
+
+usdt_contract = w3.eth.contract(address=Web3.to_checksum_address(USDT), abi=USDT_ABI)
+pay_contract = w3.eth.contract(address=Web3.to_checksum_address(CONTRACT), abi=PAY_ABI)
+
+deposit_amount = 10**18  # 1 USDT
+# approve + deposit (sign and send both transactions)
+
+# ── Step 3: Build auth headers (reuse for all API calls) ──
+def auth_headers():
+    ts = int(time.time())
+    msg = f"agentcrab:{ts}"
+    sig = account.sign_message(encode_defunct(text=msg)).signature.hex()
+    return {
+        "X-Wallet-Address": account.address,
+        "X-Signature": f"0x{sig}",
+        "X-Message": msg,
         "X-Payment-Mode": "prepaid",
-    },
-)
-data = resp.json()
-print(f"Status: {data.get('status')}")
-print(f"Summary: {data.get('summary')}")
-```
+    }
 
----
+# ── Step 4: Deposit to Polymarket ──
+resp = httpx.post(f"{API}/deposit/create",
+    json={"polymarket_address": account.address},
+    headers=auth_headers())
+evm_deposit_addr = resp.json()["data"]["deposit_addresses"]["evm"]
+# Send USDT to evm_deposit_addr (standard ERC-20 transfer)
 
-## Browser / JavaScript Examples
-
-> **Security tip**: You don't need to use your main wallet. Create a fresh wallet,
-> transfer just 0.1–1 USDT + a tiny amount of BNB for gas, and use that.
-> If the wallet is ever compromised, your loss is minimal.
-> You can create a new disposable wallet for every session.
-
-> **Dependency**: [ethers.js v6](https://docs.ethers.org/v6/) — load via CDN or npm:
-> ```html
-> <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.4/ethers.min.js"></script>
-> ```
-> Or: `npm install ethers`
-
-### Step 1: Connect Wallet (choose one)
-
-Before running any script below, create a `signer` using **one** of these two options. All subsequent scripts use `signer` identically regardless of which option you chose.
-
-**Option A — MetaMask (browser wallet)**
-
-```javascript
-// Requires MetaMask or any injected EIP-1193 wallet
-const provider = new ethers.BrowserProvider(window.ethereum);
-await provider.send("eth_requestAccounts", []);
-
-// Switch to BSC if needed
-await window.ethereum.request({
-  method: "wallet_switchEthereumChain",
-  params: [{ chainId: "0x38" }],  // 56 in hex
-});
-
-const signer = await provider.getSigner();
-console.log("Wallet:", await signer.getAddress());
-```
-
-**Option B — Private Key (paste directly)**
-
-```javascript
-const PRIVATE_KEY = "0xYOUR_PRIVATE_KEY_HERE";
-const BSC_RPC = "https://bsc-dataseed.binance.org/";
-
-const provider = new ethers.JsonRpcProvider(BSC_RPC);
-const signer = new ethers.Wallet(PRIVATE_KEY, provider);
-console.log("Wallet:", signer.address);
-```
-
----
-
-### Script D — Direct Payment (Browser)
-
-Use this when you want to pay-per-call. Each call costs 0.01 USDT on BSC. Uses `signer` from Step 1.
-
-```javascript
-/**
- * agentWay — Direct Payment (Browser)
- * Pay 0.01 USDT per call, then query football markets.
- * Prerequisite: run Step 1 above to create `signer`.
- */
-
-// ── Constants ───────────────────────────────────────────────────
-const API_BASE_URL = "http://localhost:8000";
-const CONTRACT_ADDRESS = "0x497579f445eA3707D0fE84C6bd2408620D384a4C";
-const USDT_ADDRESS = "0x55d398326f99059fF775485246999027B3197955";
-const PAYMENT_AMOUNT = ethers.parseUnits("0.01", 18);  // 0.01 USDT
-
-// ── Minimal ABIs ────────────────────────────────────────────────
-const ERC20_ABI = [
-  "function approve(address spender, uint256 amount) returns (bool)",
-  "function allowance(address owner, address spender) view returns (uint256)",
-];
-
-const PAYMENT_ABI = [
-  "function pay()",
-];
-
-// ── Setup contracts ─────────────────────────────────────────────
-const walletAddress = await signer.getAddress();
-const usdt = new ethers.Contract(USDT_ADDRESS, ERC20_ABI, signer);
-const contract = new ethers.Contract(CONTRACT_ADDRESS, PAYMENT_ABI, signer);
-
-// ── Step 1: Approve USDT (skip if already approved) ─────────────
-const allowance = await usdt.allowance(walletAddress, CONTRACT_ADDRESS);
-if (allowance < PAYMENT_AMOUNT) {
-  console.log("Approving USDT spend...");
-  const approveTx = await usdt.approve(CONTRACT_ADDRESS, PAYMENT_AMOUNT * 100n);
-  await approveTx.wait();
-  console.log("Approved. tx:", approveTx.hash);
-}
-
-// ── Step 2: Call pay() on the contract ──────────────────────────
-console.log("Calling pay() — 0.01 USDT...");
-const payTx = await contract.pay();
-const receipt = await payTx.wait();
-console.log("Payment confirmed. tx:", payTx.hash);
-
-// ── Step 3: Sign auth message ───────────────────────────────────
-const timestamp = Math.floor(Date.now() / 1000);
-const message = `agentway:${timestamp}`;
-const signature = await signer.signMessage(message);
-
-// ── Step 4: Call the API ────────────────────────────────────────
-console.log("Calling /football/markets ...");
-const resp = await fetch(
-  `${API_BASE_URL}/football/markets?limit=5`,
-  {
-    headers: {
-      "X-Wallet-Address": walletAddress,
-      "X-Signature": signature,
-      "X-Message": message,
-      "X-Payment-Mode": "direct",
-      "X-Tx-Hash": payTx.hash,
-    },
-  }
-);
-const data = await resp.json();
-console.log("Status:", data.status);
-console.log("Summary:", data.summary);
-```
-
-### Script E — Prepaid Deposit (Browser)
-
-Deposit once, then make many API calls without paying each time. Uses `signer` from Step 1.
-
-```javascript
-/**
- * agentWay — Prepaid Deposit (Browser)
- * Deposit 1 USDT (= 100 API calls), then query football markets.
- * Prerequisite: run Step 1 above to create `signer`.
- */
-
-// ── Constants ───────────────────────────────────────────────────
-const API_BASE_URL = "http://localhost:8000";
-const CONTRACT_ADDRESS = "0x497579f445eA3707D0fE84C6bd2408620D384a4C";
-const USDT_ADDRESS = "0x55d398326f99059fF775485246999027B3197955";
-const DEPOSIT_AMOUNT = ethers.parseUnits("1", 18);  // 1 USDT = 100 calls
-
-// ── Minimal ABIs ────────────────────────────────────────────────
-const ERC20_ABI = [
-  "function approve(address spender, uint256 amount) returns (bool)",
-  "function allowance(address owner, address spender) view returns (uint256)",
-];
-
-const PAYMENT_ABI = [
-  "function deposit(uint256 amount)",
-];
-
-// ── Setup contracts ─────────────────────────────────────────────
-const walletAddress = await signer.getAddress();
-const usdt = new ethers.Contract(USDT_ADDRESS, ERC20_ABI, signer);
-const contract = new ethers.Contract(CONTRACT_ADDRESS, PAYMENT_ABI, signer);
-
-// ── Step 1: Approve USDT ────────────────────────────────────────
-const allowance = await usdt.allowance(walletAddress, CONTRACT_ADDRESS);
-if (allowance < DEPOSIT_AMOUNT) {
-  console.log(`Approving ${ethers.formatUnits(DEPOSIT_AMOUNT, 18)} USDT...`);
-  const approveTx = await usdt.approve(CONTRACT_ADDRESS, DEPOSIT_AMOUNT);
-  await approveTx.wait();
-  console.log("Approved. tx:", approveTx.hash);
-}
-
-// ── Step 2: Call deposit() on the contract ──────────────────────
-console.log(`Depositing ${ethers.formatUnits(DEPOSIT_AMOUNT, 18)} USDT...`);
-const depositTx = await contract.deposit(DEPOSIT_AMOUNT);
-await depositTx.wait();
-console.log("Deposit confirmed. tx:", depositTx.hash);
-
-// ── Step 3: Wait for the background scanner ─────────────────────
-console.log("Waiting 20s for the deposit scanner...");
-await new Promise(resolve => setTimeout(resolve, 20000));
-
-// ── Step 4: Sign auth message ───────────────────────────────────
-const timestamp = Math.floor(Date.now() / 1000);
-const message = `agentway:${timestamp}`;
-const signature = await signer.signMessage(message);
-
-// ── Step 5: Call the API (prepaid mode) ─────────────────────────
-console.log("Calling /football/markets ...");
-const resp = await fetch(
-  `${API_BASE_URL}/football/markets?limit=5`,
-  {
-    headers: {
-      "X-Wallet-Address": walletAddress,
-      "X-Signature": signature,
-      "X-Message": message,
-      "X-Payment-Mode": "prepaid",
-    },
-  }
-);
-const data = await resp.json();
-console.log("Status:", data.status);
-console.log("Summary:", data.summary);
-
-// NOTE: After this initial deposit, you only need Script F below
-// for subsequent API calls — no more on-chain transactions needed
-// until your balance runs out.
-```
-
-### Script F — Subsequent Calls (Browser)
-
-After depositing (Script E), use this minimal script for every subsequent API call. No on-chain transaction required. Uses `signer` from Step 1.
-
-```javascript
-/**
- * agentWay — Subsequent API Call (Browser, prepaid mode)
- * Use this after you've already deposited USDT via Script E.
- * Prerequisite: run Step 1 above to create `signer`.
- */
-
-const API_BASE_URL = "http://localhost:8000";
-const walletAddress = await signer.getAddress();
-
-// ── Sign and call ───────────────────────────────────────────────
-const timestamp = Math.floor(Date.now() / 1000);
-const message = `agentway:${timestamp}`;
-const signature = await signer.signMessage(message);
-
-const resp = await fetch(
-  `${API_BASE_URL}/football/markets?limit=10&league=premier_league`,
-  {
-    headers: {
-      "X-Wallet-Address": walletAddress,
-      "X-Signature": signature,
-      "X-Message": message,
-      "X-Payment-Mode": "prepaid",
-    },
-  }
-);
-const data = await resp.json();
-console.log("Status:", data.status);
-console.log("Summary:", data.summary);
+# ── Step 5: Search markets ──
+resp = httpx.get(f"{API}/markets/search?query=premier+league&limit=5",
+    headers=auth_headers())
+print(resp.json()["summary"])
 ```
 
 ---
@@ -743,22 +318,8 @@ console.log("Summary:", data.summary);
 ## Deployment (Self-Hosted)
 
 ```bash
-# Clone the repo
 git clone https://github.com/happycryptochillguy-star/agentCrab.git
 cd agentWay/Polymarket
-
-# Set up environment
-cp .env.example .env
-# Edit .env: set PRIVATE_KEY, CONTRACT_ADDRESS, BSC_RPC_URL
-
-# Install Python dependencies
 pip install -r api/requirements.txt
-
-# Run the API server
 uvicorn api.main:app --host 0.0.0.0 --port 8000
-
-# Deploy the smart contract (requires Foundry)
-cd contracts
-forge script script/Deploy.s.sol:DeployScript --rpc-url $BSC_RPC_URL --broadcast --verify -vvvv
-# Copy the proxy address to .env as CONTRACT_ADDRESS
 ```

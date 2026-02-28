@@ -12,7 +12,7 @@ from api.services import balance as balance_svc
 
 _ETH_ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
-logger = logging.getLogger("agentway.payment")
+logger = logging.getLogger("agentcrab.payment")
 
 # ABI fragments we need
 PAYMENT_ABI = json.loads("""[
@@ -50,13 +50,13 @@ def is_valid_address(address: str) -> bool:
 
 
 def verify_signature(wallet_address: str, message: str, signature: str) -> bool:
-    """Verify EIP-191 personal_sign. Message format: 'agentway:{unix_timestamp}'."""
+    """Verify EIP-191 personal_sign. Message format: 'agentcrab:{unix_timestamp}'."""
     try:
         if not is_valid_address(wallet_address):
             return False
         # Check timestamp freshness
         parts = message.split(":")
-        if len(parts) != 2 or parts[0] != "agentway":
+        if len(parts) != 2 or parts[0] != "agentcrab":
             return False
 
         ts = int(parts[1])

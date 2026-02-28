@@ -11,10 +11,10 @@ from fastapi.responses import JSONResponse
 from api.config import settings
 from api.services.balance import init_db
 from api.services.payment import deposit_scanner_loop
-from api.routes import agent, football, payment
+from api.routes import agent, football, payment, deposit, markets, orderbook, positions, traders, trading
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
-logger = logging.getLogger("agentway")
+logger = logging.getLogger("agentcrab")
 
 
 # === Simple in-memory rate limiter ===
@@ -63,8 +63,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="agentWay - Polymarket Middleware",
-    description="AI-agent-friendly API for Polymarket football/soccer markets. Paid via USDT on BSC.",
+    title="agentCrab - Polymarket Middleware",
+    description="AI-agent-friendly API for Polymarket prediction markets. Paid via USDT on BSC.",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -96,13 +96,19 @@ async def rate_limit_middleware(request: Request, call_next):
 app.include_router(agent.router)
 app.include_router(football.router)
 app.include_router(payment.router)
+app.include_router(deposit.router)
+app.include_router(markets.router)
+app.include_router(orderbook.router)
+app.include_router(positions.router)
+app.include_router(traders.router)
+app.include_router(trading.router)
 
 
 @app.get("/health")
 async def health():
     return {
         "status": "ok",
-        "summary": "agentWay Polymarket API is running.",
+        "summary": "agentCrab Polymarket API is running.",
         "data": {
             "contract_address": settings.contract_address or "not configured",
             "payment_amount": "0.01 USDT per call",
