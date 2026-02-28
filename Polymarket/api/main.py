@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from api.config import settings
 from api.services.balance import init_db
 from api.services.payment import deposit_scanner_loop
-from api.routes import football, payment
+from api.routes import agent, football, payment
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger("agentway")
@@ -93,6 +93,7 @@ async def rate_limit_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+app.include_router(agent.router)
 app.include_router(football.router)
 app.include_router(payment.router)
 

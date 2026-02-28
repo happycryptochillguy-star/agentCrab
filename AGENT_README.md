@@ -12,20 +12,26 @@ agentWay is an API middleware built for AI agents. It provides structured, easy-
 
 **Communication style**: Be concise. Use short, natural sentences. No technical jargon. Don't explain what you're doing behind the scenes — just do it and show results. Never say things like "I'm writing code" or "Let me create a script". The human should feel like they're talking to a helpful assistant, not watching a programmer work.
 
-**Workflow** (3 steps only):
+**Workflow** (4 steps):
 
-1. **Introduce & ask** — One short message, e.g.:
+1. **Introduce & ask payment preference** — One short message, e.g.:
    > "I can look up football/soccer betting odds and predictions from Polymarket. Each query costs about $0.01 (paid in USDT on BSC). Two payment options:
    > (A) Pay per query — $0.01 each time
    > (B) Prepaid — deposit once, use many times (e.g. $1 = 100 queries)
    > Which do you prefer?"
    — Wait for the human's answer. Do NOT proceed without it.
 
-2. **Confirm payment** — Before any on-chain transaction, one short confirmation:
+2. **Ask which league(s)** — After payment is set up, ask what the human wants to see before calling the API:
+   > "Which league(s) do you want to check? For example:
+   > Premier League, La Liga, UCL, Serie A, Bundesliga, Ligue 1, MLS, World Cup, Europa League
+   > Or I can show all available football markets."
+   — Wait for the human's answer. Do NOT call the API with a random/default query.
+
+3. **Confirm payment** — Before any on-chain transaction, one short confirmation:
    > "This will spend 0.01 USDT from your wallet (0xABC...123). OK?"
    — Wait for "yes". Do NOT send any transaction without explicit approval.
 
-3. **Show results** — After the API call, relay the `summary` field and key data (odds, volumes) in a clean, readable format. No filler text.
+4. **Show results** — After the API call, relay the `summary` field and key data (odds, volumes) in a clean, readable format. No filler text.
 
 **Don'ts**:
 - Don't narrate your internal process ("Now I'll sign the message...", "Let me construct the request...")
@@ -36,16 +42,11 @@ agentWay is an API middleware built for AI agents. It provides structured, easy-
 
 ---
 
-## Available Services
+## Feature Discovery
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/football/markets` | GET | Get active football/soccer events with odds, volumes, and market data |
-| `/payment/balance` | GET | Check your prepaid balance and remaining API calls |
-| `/payment/verify` | POST | Verify a direct payment transaction |
-| `/health` | GET | Check if the API is running (free, no auth) |
+Call `GET /agent/capabilities` to get a complete, machine-readable description of all endpoints, parameters, authentication, payment methods, error codes, and rate limits. **This endpoint is free and requires no authentication.**
 
-**Base URL**: `https://api.agentcrab.ai`
+Always call this endpoint first when starting a new session. It replaces the need to re-read this README for API details.
 
 ---
 
@@ -709,158 +710,6 @@ const data = await resp.json();
 console.log("Status:", data.status);
 console.log("Summary:", data.summary);
 ```
-
----
-
-## API Reference
-
-### GET /football/markets
-
-Fetch active football/soccer prediction markets from Polymarket.
-
-**Query Parameters:**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `league` | string | null | Filter by league: `premier_league`, `la_liga`, `ucl`, `champions_league`, `serie_a`, `bundesliga`, `ligue_1`, `mls`, `world_cup`, `europa_league` |
-| `limit` | int | 20 | Max results (1-100) |
-| `offset` | int | 0 | Pagination offset |
-
-**Example Response:**
-
-```json
-{
-  "status": "ok",
-  "summary": "Found 3 active football events on Polymarket. Top event: \"Arsenal vs Chelsea - Premier League\" with $45,000 in volume.",
-  "data": [
-    {
-      "event_id": "12345",
-      "title": "Arsenal vs Chelsea - Premier League",
-      "slug": "arsenal-vs-chelsea-premier-league",
-      "markets": [
-        {
-          "question": "Will Arsenal win against Chelsea?",
-          "market_slug": "will-arsenal-win-against-chelsea",
-          "outcomes": [
-            {"outcome": "Yes", "price": 0.65, "token_id": "abc123..."},
-            {"outcome": "No", "price": 0.35, "token_id": "def456..."}
-          ],
-          "volume": 45000.0,
-          "liquidity": 12000.0,
-          "end_date": "2026-03-15T20:00:00Z",
-          "active": true
-        }
-      ],
-      "volume": 45000.0,
-      "start_date": "2026-03-15T17:30:00Z",
-      "end_date": "2026-03-15T20:00:00Z"
-    }
-  ]
-}
-```
-
-**Field Descriptions:**
-- `summary`: Natural language summary you can relay directly to the human
-- `event_id`: Polymarket event identifier
-- `title`: Human-readable event title
-- `markets[].question`: The prediction question
-- `markets[].outcomes[].price`: Current probability (0.0 to 1.0). E.g., 0.65 = 65% chance
-- `markets[].outcomes[].token_id`: Polymarket CLOB token ID for trading
-- `markets[].volume`: Total trading volume in USD
-- `markets[].liquidity`: Current liquidity in USD
-
-### GET /payment/balance
-
-Check your prepaid balance.
-
-**Headers**: `X-Wallet-Address`, `X-Signature`, `X-Message` (no payment headers needed)
-
-**Example Response:**
-
-```json
-{
-  "status": "ok",
-  "summary": "Wallet 0xABC123... has 50 API calls remaining (0.5000 USDT).",
-  "data": {
-    "wallet_address": "0xabc123...",
-    "total_deposited_wei": "1000000000000000000",
-    "total_consumed_wei": "500000000000000000",
-    "remaining_wei": "500000000000000000",
-    "calls_remaining": 50
-  }
-}
-```
-
-### POST /payment/verify
-
-Verify a direct payment transaction.
-
-**Query Parameter**: `tx_hash` (required) — the BSC transaction hash
-
-**Headers**: `X-Wallet-Address`, `X-Signature`, `X-Message`
-
-**Example Response:**
-
-```json
-{
-  "status": "ok",
-  "summary": "Transaction 0xabc123... verified. DirectPayment from 0xdef456... confirmed.",
-  "data": {
-    "tx_hash": "0xabc123...",
-    "verified": true,
-    "wallet_address": "0xdef456...",
-    "message": "Payment verified successfully."
-  }
-}
-```
-
-### GET /health
-
-No authentication required. Check API status.
-
-```json
-{
-  "status": "ok",
-  "summary": "agentWay Polymarket API is running.",
-  "data": {
-    "contract_address": "0x...",
-    "payment_amount": "0.01 USDT per call",
-    "chain": "BSC (Chain ID: 56)"
-  }
-}
-```
-
----
-
-## Error Codes
-
-All errors follow this format:
-
-```json
-{
-  "status": "error",
-  "error_code": "ERROR_CODE",
-  "message": "Human-readable description of what went wrong and what to do next."
-}
-```
-
-| Error Code | HTTP Status | Meaning | What to Do |
-|------------|-------------|---------|------------|
-| `INVALID_SIGNATURE` | 401 | Signature verification failed | Re-sign `agentway:{current_unix_timestamp}` with your wallet key |
-| `MISSING_TX_HASH` | 400 | Direct mode but no tx hash provided | Add `X-Tx-Hash` header with the `pay()` transaction hash |
-| `PAYMENT_NOT_VERIFIED` | 402 | Cannot find DirectPayment event in tx | Verify you called `pay()` on the correct contract and tx is confirmed |
-| `INSUFFICIENT_BALANCE` | 402 | Prepaid balance too low | Deposit more USDT via `deposit()` on the contract |
-| `BALANCE_DEDUCTION_FAILED` | 402 | Off-chain balance deduction failed | Retry the request |
-| `INVALID_PAYMENT_MODE` | 400 | Unknown payment mode | Use `direct` or `prepaid` in `X-Payment-Mode` header |
-| `UPSTREAM_ERROR` | 502 | Polymarket API failed | Retry after a few seconds |
-
----
-
-## Pricing
-
-- **0.01 USDT per API call** (10^16 wei, since BSC USDT has 18 decimals)
-- Paid via smart contract on BSC (Chain ID: 56)
-- USDT token: `0x55d398326f99059fF775485246999027B3197955`
 
 ---
 

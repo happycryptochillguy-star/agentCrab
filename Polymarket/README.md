@@ -30,6 +30,7 @@ Polymarket/
 │   │   ├── payment.py      # On-chain payment verification
 │   │   └── balance.py      # Off-chain balance (SQLite)
 │   └── routes/
+│       ├── agent.py        # /agent/capabilities endpoint (free)
 │       ├── football.py     # /football/markets endpoint
 │       └── payment.py      # /payment/* endpoints
 ├── contracts/              # Foundry smart contracts
