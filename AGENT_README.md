@@ -12,39 +12,60 @@ agentWay is an API middleware built for AI agents. It provides structured, easy-
 
 **Communication style**: Be concise. Use short, natural sentences. No technical jargon. Don't explain what you're doing behind the scenes — just do it and show results. Never say things like "I'm writing code" or "Let me create a script". The human should feel like they're talking to a helpful assistant, not watching a programmer work.
 
-**Workflow** (5 steps):
+**Workflow**:
 
-1. **Ask for wallet** — First, ask if the human already has a BSC wallet private key:
-   > "Do you have a BSC wallet private key you'd like to use? If yes, please paste it. If not, I can create a new disposable wallet for you."
-   — If the human provides a private key, use it. Do NOT create a new wallet.
-   — If the human says no or wants a new one, create a fresh wallet and show them the address. Remind them to transfer a small amount of USDT + BNB for gas.
-   — Also check: if a `.env` file exists with `PRIVATE_KEY`, use that automatically and tell the human which wallet address is being used.
+**Step 1 — Wallet setup**
 
-2. **Introduce & ask payment preference** — One short message, e.g.:
-   > "Each query costs about $0.01 (paid in USDT on BSC). Two payment options:
-   > (A) Pay per query — $0.01 each time
-   > (B) Prepaid — deposit once, use many times (e.g. $1 = 100 queries)
-   > Which do you prefer?"
-   — Wait for the human's answer. Do NOT proceed without it.
+- First check: if a `.env` file exists with `PRIVATE_KEY`, use it automatically. Tell the human: "Using wallet 0xABC...123 from your .env file."
+- If no `.env`, ask: "Do you have a BSC wallet private key? If yes, paste it here. If not, I'll create a new one."
+- If the human provides a key, use it. Do NOT create a new wallet.
+- Only create a new wallet if the human explicitly asks for one. Remind them to transfer USDT + BNB for gas.
 
-3. **Ask which league(s)** — After payment is set up, ask what the human wants to see before calling the API:
-   > "Which league(s) do you want to check? For example:
-   > Premier League, La Liga, UCL, Serie A, Bundesliga, Ligue 1, MLS, World Cup, Europa League
-   > Or I can show all available football markets."
-   — Wait for the human's answer. Do NOT call the API with a random/default query.
+**Step 2 — Payment setup** (ask, then set up)
 
-4. **Confirm payment** — Before any on-chain transaction, one short confirmation:
-   > "This will spend 0.01 USDT from your wallet (0xABC...123). OK?"
-   — Wait for "yes". Do NOT send any transaction without explicit approval.
+Tell the human:
+> "Each query costs $0.01 USDT on BSC. Two options:
+> (A) Pay per query — $0.01 each time
+> (B) Prepaid — deposit once, use many times (e.g. $1 = 100 queries)
+> Which do you prefer?"
 
-5. **Show results** — After the API call, relay the `summary` field and key data (odds, volumes) in a clean, readable format. No filler text.
+Wait for the answer. Then follow the chosen path:
+
+- **If Direct (A)**: No setup needed now. Payment happens per-query in Step 4.
+- **If Prepaid (B)**:
+  1. Check existing balance via `GET /payment/balance`.
+  2. If balance > 0, tell the human: "You already have X calls remaining. No deposit needed."
+  3. If balance = 0, ask how much to deposit (suggest $1 = 100 calls). Get confirmation: "Deposit 1 USDT from your wallet? OK?"
+  4. On "yes": execute `approve()` + `deposit()` on-chain, then wait ~15s for the scanner.
+  5. Confirm: "Deposit complete. You now have X calls available."
+
+**Step 3 — Ask which league(s)**
+
+> "Which league(s) do you want to check?
+> Premier League, La Liga, UCL, Serie A, Bundesliga, Ligue 1, MLS, World Cup, Europa League
+> Or I can show all available football markets."
+
+Wait for the answer. Do NOT call the API with a random/default query.
+
+**Step 4 — Query & payment**
+
+- **Direct mode**: Confirm first ("This will spend 0.01 USDT. OK?"), then execute `approve()` + `pay()` on-chain, then call the API with the tx hash.
+- **Prepaid mode**: No confirmation needed — just call the API. Balance is deducted automatically (0.01 USDT per call).
+
+**Step 5 — Show results**
+
+Relay the `summary` field and key data (odds, volumes) in a clean, readable format. No filler text.
+
+**Subsequent queries** (same session):
+
+Skip steps 1-2. Go directly to Step 3 (ask league) → Step 4 (query) → Step 5 (results). For prepaid users, no payment confirmation is needed as long as balance remains.
 
 **Don'ts**:
 - Don't narrate your internal process ("Now I'll sign the message...", "Let me construct the request...")
 - Don't show raw code, raw JSON, or technical logs to the human unless they ask
 - Don't repeat information the human already knows
 - Don't add disclaimers, caveats, or unnecessary warnings
-- Don't skip the payment confirmation step — every transaction needs a "yes"
+- Don't skip the payment confirmation step for on-chain transactions — every transaction needs a "yes"
 
 ---
 
