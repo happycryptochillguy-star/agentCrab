@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 import time
 
 from eth_account.messages import encode_defunct
@@ -8,6 +9,8 @@ from web3 import Web3
 
 from api.config import settings
 from api.services import balance as balance_svc
+
+_ETH_ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
 logger = logging.getLogger("agentway.payment")
 
@@ -41,9 +44,16 @@ def get_contract():
     return _contract
 
 
+def is_valid_address(address: str) -> bool:
+    """Check if a string is a valid Ethereum address."""
+    return bool(_ETH_ADDRESS_RE.match(address))
+
+
 def verify_signature(wallet_address: str, message: str, signature: str) -> bool:
     """Verify EIP-191 personal_sign. Message format: 'agentway:{unix_timestamp}'."""
     try:
+        if not is_valid_address(wallet_address):
+            return False
         # Check timestamp freshness
         parts = message.split(":")
         if len(parts) != 2 or parts[0] != "agentway":
@@ -64,8 +74,13 @@ def verify_signature(wallet_address: str, message: str, signature: str) -> bool:
 
 
 async def verify_direct_payment(tx_hash: str, wallet_address: str) -> bool:
-    """Verify a DirectPayment event in a BSC transaction receipt."""
+    """Verify a DirectPayment event in a BSC transaction receipt. Rejects replayed tx hashes."""
     try:
+        # Reject already-used tx hashes
+        if await balance_svc.is_tx_used(tx_hash):
+            logger.warning("Rejected replayed tx hash: %s", tx_hash)
+            return False
+
         w3 = get_w3()
         receipt = w3.eth.get_transaction_receipt(tx_hash)
         if receipt is None or receipt["status"] != 1:
@@ -75,6 +90,7 @@ async def verify_direct_payment(tx_hash: str, wallet_address: str) -> bool:
         logs = contract.events.DirectPayment().process_receipt(receipt)
         for log in logs:
             if log["args"]["user"].lower() == wallet_address.lower():
+                await balance_svc.mark_tx_used(tx_hash, wallet_address)
                 return True
         return False
     except Exception as e:

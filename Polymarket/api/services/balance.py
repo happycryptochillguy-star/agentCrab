@@ -9,6 +9,7 @@ DB_PATH = settings.db_path
 async def init_db():
     """Create tables if they don't exist."""
     async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
         await db.execute("""
             CREATE TABLE IF NOT EXISTS balances (
                 wallet_address TEXT PRIMARY KEY,
@@ -22,6 +23,13 @@ async def init_db():
                 wallet_address TEXT NOT NULL,
                 amount INTEGER NOT NULL,
                 endpoint TEXT NOT NULL,
+                timestamp REAL NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS used_tx_hashes (
+                tx_hash TEXT PRIMARY KEY,
+                wallet_address TEXT NOT NULL,
                 timestamp REAL NOT NULL
             )
         """)
@@ -42,31 +50,43 @@ async def credit_deposit(wallet_address: str, amount: int):
 
 
 async def consume(wallet_address: str, amount: int, endpoint: str) -> bool:
-    """Consume from prepaid balance. Returns True if sufficient balance."""
+    """Atomically consume from prepaid balance. Returns True if sufficient balance."""
     addr = wallet_address.lower()
     async with aiosqlite.connect(DB_PATH) as db:
-        row = await db.execute_fetchall(
-            "SELECT total_deposited, total_consumed FROM balances WHERE wallet_address = ?",
-            (addr,),
+        cursor = await db.execute(
+            """UPDATE balances SET total_consumed = total_consumed + ?
+               WHERE wallet_address = ? AND (total_deposited - total_consumed) >= ?""",
+            (amount, addr, amount),
         )
-        if not row:
+        if cursor.rowcount == 0:
             return False
 
-        deposited, consumed = row[0]
-        remaining = deposited - consumed
-        if remaining < amount:
-            return False
-
-        await db.execute(
-            "UPDATE balances SET total_consumed = total_consumed + ? WHERE wallet_address = ?",
-            (amount, addr),
-        )
         await db.execute(
             "INSERT INTO usage_log (wallet_address, amount, endpoint, timestamp) VALUES (?, ?, ?, ?)",
             (addr, amount, endpoint, time.time()),
         )
         await db.commit()
         return True
+
+
+async def is_tx_used(tx_hash: str) -> bool:
+    """Check if a transaction hash has already been used for payment."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        row = await db.execute_fetchall(
+            "SELECT 1 FROM used_tx_hashes WHERE tx_hash = ?",
+            (tx_hash.lower(),),
+        )
+        return len(row) > 0
+
+
+async def mark_tx_used(tx_hash: str, wallet_address: str):
+    """Mark a transaction hash as used."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO used_tx_hashes (tx_hash, wallet_address, timestamp) VALUES (?, ?, ?)",
+            (tx_hash.lower(), wallet_address.lower(), time.time()),
+        )
+        await db.commit()
 
 
 async def get_remaining(wallet_address: str) -> tuple[int, int, int]:

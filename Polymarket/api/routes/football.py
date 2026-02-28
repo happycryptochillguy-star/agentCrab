@@ -84,12 +84,12 @@ async def get_football_markets(
     # 3. Fetch Polymarket data
     try:
         events = await fetch_football_events(league=league, limit=limit, offset=offset)
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(
                 error_code="UPSTREAM_ERROR",
-                message=f"Failed to fetch data from Polymarket: {e}",
+                message="Failed to fetch data from Polymarket. Please retry in a few seconds.",
             ).model_dump(),
         )
 

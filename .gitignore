@@ -1,5 +1,7 @@
-# Environment variables
-.env
+# Environment variables / secrets
+.env*
+*.pem
+*.key
 
 # Node
 node_modules/
@@ -19,6 +21,7 @@ __pycache__/
 # Foundry
 Polymarket/contracts/out/
 Polymarket/contracts/cache/
+Polymarket/contracts/broadcast/
 
 # SQLite
 *.db
