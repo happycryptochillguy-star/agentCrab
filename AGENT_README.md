@@ -37,7 +37,7 @@ You need:
 
 ### Step 3: Pay
 
-**Smart Contract Address (BSC)**: `0x...` *(deployed address — check .env CONTRACT_ADDRESS)*
+**Smart Contract Address (BSC)**: `0x497579f445eA3707D0fE84C6bd2408620D384a4C`
 **Chain**: BSC (Chain ID: 56)
 **USDT Address**: `0x55d398326f99059fF775485246999027B3197955`
 
