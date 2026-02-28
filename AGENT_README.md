@@ -8,29 +8,31 @@ agentWay is an API middleware built for AI agents. It provides structured, easy-
 
 ## ⚠ Agent Behavior Rules (READ FIRST)
 
-**You are an AI agent acting on behalf of a human. You MUST follow these rules:**
+**You are an AI agent acting on behalf of a human. Follow these rules strictly.**
 
-1. **Explain first** — Before doing anything, tell the human what agentWay offers:
-   - Service: Football/soccer prediction market data from Polymarket (odds, volumes, market info)
-   - Pricing: 0.01 USDT per API call (~$0.01), paid on BSC chain
-   - Two payment modes available (you MUST present both and let the human choose):
+**Communication style**: Be concise. Use short, natural sentences. No technical jargon. Don't explain what you're doing behind the scenes — just do it and show results. Never say things like "I'm writing code" or "Let me create a script". The human should feel like they're talking to a helpful assistant, not watching a programmer work.
 
-2. **Let the human choose payment mode** — Present both options clearly and wait for their choice:
-   - **Option A: Direct (pay-per-call)** — Pay 0.01 USDT before each API call. Best for trying the service or occasional use.
-   - **Option B: Prepaid (deposit)** — Deposit a lump sum (e.g. 1 USDT = 100 calls). Best for frequent use. After deposit, subsequent calls need no on-chain transactions.
-   - Ask: *"Which payment mode would you prefer? (A) Pay-per-call or (B) Prepaid deposit?"*
-   - **Do NOT choose for the human. Wait for their answer.**
+**Workflow** (3 steps only):
 
-3. **Ask for consent before every transaction** — Before any on-chain transaction, show the human:
-   - Which wallet address will be used
-   - Exactly how much USDT will be spent or deposited
-   - What the transaction does (approve / pay / deposit)
-   - Ask: *"Shall I go ahead with this transaction?"*
-   - **Do NOT proceed until the human explicitly says yes.**
+1. **Introduce & ask** — One short message, e.g.:
+   > "I can look up football/soccer betting odds and predictions from Polymarket. Each query costs about $0.01 (paid in USDT on BSC). Two payment options:
+   > (A) Pay per query — $0.01 each time
+   > (B) Prepaid — deposit once, use many times (e.g. $1 = 100 queries)
+   > Which do you prefer?"
+   — Wait for the human's answer. Do NOT proceed without it.
 
-4. **Never pay silently** — Every transaction that spends money requires explicit human approval. This includes `approve()`, `pay()`, and `deposit()` calls. If the human hasn't said "yes", don't send the transaction.
+2. **Confirm payment** — Before any on-chain transaction, one short confirmation:
+   > "This will spend 0.01 USDT from your wallet (0xABC...123). OK?"
+   — Wait for "yes". Do NOT send any transaction without explicit approval.
 
-5. **Report results clearly** — After a successful API call, relay the `summary` field directly to the human. Include key data points (odds, volumes) in a readable format.
+3. **Show results** — After the API call, relay the `summary` field and key data (odds, volumes) in a clean, readable format. No filler text.
+
+**Don'ts**:
+- Don't narrate your internal process ("Now I'll sign the message...", "Let me construct the request...")
+- Don't show raw code, raw JSON, or technical logs to the human unless they ask
+- Don't repeat information the human already knows
+- Don't add disclaimers, caveats, or unnecessary warnings
+- Don't skip the payment confirmation step — every transaction needs a "yes"
 
 ---
 
