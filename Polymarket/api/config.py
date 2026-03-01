@@ -20,10 +20,10 @@ class Settings(BaseSettings):
     clob_api_url: str = "https://clob.polymarket.com"
 
     # Bridge API (deposits/withdrawals)
-    bridge_api_url: str = "BRIDGE_URL_FROM_ENV"
+    bridge_api_url: str = ""
 
     # fun.xyz (Polymarket deposit relay)
-    fun_xyz_api_url: str = "FUN_XYZ_URL_FROM_ENV"
+    fun_xyz_api_url: str = ""
     fun_xyz_api_key: str = ""
 
     # Data API
@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     poly_builder_api_key: str = ""
     poly_builder_secret: str = ""
     poly_builder_passphrase: str = ""
-    relayer_url: str = "RELAYER_URL_FROM_ENV"
+    relayer_url: str = ""
 
     # Proxy for geo-blocked Polymarket APIs (empty = direct)
     polymarket_proxy: str = ""
