@@ -33,6 +33,88 @@ async def init_db():
                 timestamp REAL NOT NULL
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS historical_events (
+                event_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                category TEXT,
+                start_date TEXT,
+                end_date TEXT,
+                closed_time TEXT,
+                volume REAL,
+                resolution TEXT,
+                tags TEXT,
+                market_count INTEGER DEFAULT 0,
+                synced_at REAL
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_hist_category ON historical_events(category)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_hist_volume ON historical_events(volume)"
+        )
+
+        # === Category Leaderboard Tables ===
+
+        # market_slug → category permanent cache (slugs don't change)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS market_category_map (
+                market_slug TEXT PRIMARY KEY,
+                category_path TEXT,
+                tags TEXT,
+                question TEXT,
+                event_id TEXT,
+                volume REAL,
+                mapped_at REAL NOT NULL
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_mcm_category ON market_category_map(category_path)"
+        )
+
+        # Per-category leaderboard aggregation (rebuilt each sync)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS category_leaderboard (
+                address TEXT NOT NULL,
+                category_path TEXT NOT NULL,
+                display_name TEXT,
+                total_positions INTEGER DEFAULT 0,
+                total_pnl REAL DEFAULT 0,
+                total_volume REAL DEFAULT 0,
+                win_rate REAL,
+                best_pnl_market TEXT,
+                best_pnl_value REAL,
+                synced_at REAL NOT NULL,
+                PRIMARY KEY (address, category_path)
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_cl_category_pnl ON category_leaderboard(category_path, total_pnl DESC)"
+        )
+
+        # Per-trader per-category position snapshots (for drill-down)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS trader_category_positions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                address TEXT NOT NULL,
+                category_path TEXT,
+                market_slug TEXT,
+                question TEXT,
+                outcome TEXT,
+                token_id TEXT,
+                size TEXT,
+                avg_price TEXT,
+                current_price TEXT,
+                pnl TEXT,
+                pnl_percent TEXT,
+                synced_at REAL NOT NULL
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tcp_addr_cat ON trader_category_positions(address, category_path)"
+        )
+
         await db.commit()
 
 

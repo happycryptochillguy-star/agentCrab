@@ -82,9 +82,9 @@ async def get_setup_guide():
                         "Include these headers in all trading requests:\n"
                         "- X-Poly-Api-Key: your API key\n"
                         "- X-Poly-Secret: your secret\n"
-                        "- X-Poly-Passphrase: your passphrase\n"
-                        "- X-Poly-Address: your Polygon wallet address\n\n"
-                        "These credentials don't expire. Store them securely."
+                        "- X-Poly-Passphrase: your passphrase\n\n"
+                        "These credentials don't expire. Store them securely. "
+                        "Server derives your Polygon address automatically."
                     ),
                 },
             ],
@@ -175,7 +175,7 @@ async def prepare_deploy_safe(
     """
     safe_address = payment_svc.derive_safe_address(wallet_address)
     try:
-        deployed = relayer_svc.is_safe_deployed(wallet_address)
+        deployed = await relayer_svc.is_safe_deployed(wallet_address)
     except Exception as e:
         raise HTTPException(
             status_code=502,
@@ -191,7 +191,7 @@ async def prepare_deploy_safe(
             data={"already_deployed": True, "safe_address": safe_address},
         )
 
-    typed_data = relayer_svc.build_create_proxy_typed_data()
+    typed_data = relayer_svc.build_create_proxy_typed_data()  # pure computation, no HTTP
     return SuccessResponse(
         summary=(
             f"Safe not yet deployed. Sign the typed data with sign_typed_data() "
@@ -217,7 +217,7 @@ async def submit_deploy_safe(
     """
     safe_address = payment_svc.derive_safe_address(wallet_address)
     try:
-        result = relayer_svc.deploy_safe(wallet_address, req.signature)
+        result = await relayer_svc.deploy_safe(wallet_address, req.signature)
     except Exception as e:
         raise HTTPException(
             status_code=502,
@@ -280,7 +280,7 @@ async def prepare_enable(
     # Check Safe deployment
     safe_address = payment_svc.derive_safe_address(wallet_address)
     try:
-        deployed = relayer_svc.is_safe_deployed(wallet_address)
+        deployed = await relayer_svc.is_safe_deployed(wallet_address)
     except Exception as e:
         raise HTTPException(
             status_code=502,
@@ -314,7 +314,7 @@ async def prepare_enable(
     if not approval_status["all_approved"]:
         try:
             only_missing = approval_status["missing"] if approval_status["missing"] else None
-            approval_data = relayer_svc.build_approval_data(
+            approval_data = await relayer_svc.build_approval_data(
                 wallet_address, only_missing=only_missing,
             )
         except Exception as e:
@@ -394,7 +394,7 @@ async def submit_approvals(
     from prepare-enable's approval_data.
     """
     try:
-        result = relayer_svc.submit_approvals(
+        result = await relayer_svc.submit_approvals(
             wallet_address, req.signature, req.approval_data,
         )
     except Exception as e:
@@ -452,7 +452,6 @@ async def submit_credentials(
                 "X-Poly-Api-Key": creds.get("apiKey"),
                 "X-Poly-Secret": creds.get("secret"),
                 "X-Poly-Passphrase": creds.get("passphrase"),
-                "X-Poly-Address": wallet_address,
             },
         },
     )

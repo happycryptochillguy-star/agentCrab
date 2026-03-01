@@ -58,7 +58,7 @@ def _build_hmac_signature(
     key = base64.urlsafe_b64decode(secret)
     message = f"{timestamp}{method}{path}"
     if body:
-        message += body.replace("'", '"')
+        message += body
     h = hmac_mod.new(key, message.encode(), hashlib.sha256)
     return base64.urlsafe_b64encode(h.digest()).decode()
 
@@ -87,21 +87,23 @@ def _client_kwargs() -> dict:
     return kwargs
 
 
-def _relayer_get(path: str, params: dict = None) -> dict:
+async def _relayer_get(path: str, params: dict = None) -> dict:
     """GET request to relayer (public endpoints, no auth)."""
     url = f"{settings.relayer_url}{path}"
-    resp = httpx.get(url, params=params, **_client_kwargs())
+    async with httpx.AsyncClient(**_client_kwargs()) as client:
+        resp = await client.get(url, params=params)
     resp.raise_for_status()
     return resp.json()
 
 
-def _relayer_post(path: str, body: dict) -> dict:
+async def _relayer_post(path: str, body: dict) -> dict:
     """POST request to relayer with Builder auth."""
     body_str = json.dumps(body)
     headers = _builder_headers("POST", path, body_str)
     headers["Content-Type"] = "application/json"
     url = f"{settings.relayer_url}{path}"
-    resp = httpx.post(url, content=body_str, headers=headers, **_client_kwargs())
+    async with httpx.AsyncClient(**_client_kwargs()) as client:
+        resp = await client.post(url, content=body_str, headers=headers)
     resp.raise_for_status()
     return resp.json()
 
@@ -109,22 +111,22 @@ def _relayer_post(path: str, body: dict) -> dict:
 # ── Relayer Queries ──
 
 
-def is_safe_deployed(eoa_address: str) -> bool:
+async def is_safe_deployed(eoa_address: str) -> bool:
     """Check if a Safe is deployed for an EOA."""
     safe = derive_safe_address(eoa_address)
-    data = _relayer_get("/deployed", {"address": safe})
+    data = await _relayer_get("/deployed", {"address": safe})
     return data.get("deployed", False)
 
 
-def get_safe_nonce(eoa_address: str) -> int:
+async def get_safe_nonce(eoa_address: str) -> int:
     """Get the current Safe nonce from relayer."""
-    data = _relayer_get("/nonce", {"address": eoa_address, "type": "SAFE"})
+    data = await _relayer_get("/nonce", {"address": eoa_address, "type": "SAFE"})
     return int(data.get("nonce", 0))
 
 
-def get_transaction(tx_id: str) -> dict:
+async def get_transaction(tx_id: str) -> dict:
     """Get transaction status from relayer."""
-    return _relayer_get("/transaction", {"id": tx_id})
+    return await _relayer_get("/transaction", {"id": tx_id})
 
 
 async def poll_transaction(
@@ -132,7 +134,7 @@ async def poll_transaction(
 ) -> dict:
     """Poll relayer until transaction reaches a terminal state."""
     for _ in range(max_polls):
-        data = get_transaction(tx_id)
+        data = await get_transaction(tx_id)
         # Relayer returns a list of transactions
         tx = data[0] if isinstance(data, list) else data
         state = tx.get("state", "")
@@ -398,7 +400,7 @@ def build_create_proxy_typed_data() -> dict:
     }
 
 
-def deploy_safe(eoa_address: str, signature: str) -> dict:
+async def deploy_safe(eoa_address: str, signature: str) -> dict:
     """Submit SAFE-CREATE to relayer. Returns relayer response."""
     safe_address = derive_safe_address(eoa_address)
     request = {
@@ -414,10 +416,10 @@ def deploy_safe(eoa_address: str, signature: str) -> dict:
             "paymentReceiver": ZERO_ADDRESS,
         },
     }
-    return _relayer_post("/submit", request)
+    return await _relayer_post("/submit", request)
 
 
-def build_approval_data(eoa_address: str, only_missing: list[str] | None = None) -> dict:
+async def build_approval_data(eoa_address: str, only_missing: list[str] | None = None) -> dict:
     """Build the SafeTx hash for approval transactions.
 
     If only_missing is provided, only includes those specific approvals.
@@ -425,7 +427,7 @@ def build_approval_data(eoa_address: str, only_missing: list[str] | None = None)
         Account.sign_message(encode_defunct(HexBytes(hash)))
     """
     safe_address = derive_safe_address(eoa_address)
-    nonce = get_safe_nonce(eoa_address)
+    nonce = await get_safe_nonce(eoa_address)
 
     calls = _build_approval_calls(only_missing=only_missing)
     if not calls:
@@ -452,7 +454,7 @@ def build_approval_data(eoa_address: str, only_missing: list[str] | None = None)
     }
 
 
-def submit_approvals(eoa_address: str, signature: str, approval_data: dict) -> dict:
+async def submit_approvals(eoa_address: str, signature: str, approval_data: dict) -> dict:
     """Submit Safe approval transaction to relayer.
 
     Takes the personal_sign signature, applies v+4, and submits.
@@ -478,4 +480,4 @@ def submit_approvals(eoa_address: str, signature: str, approval_data: dict) -> d
         },
         "nonce": str(approval_data["nonce"]),
     }
-    return _relayer_post("/submit", request)
+    return await _relayer_post("/submit", request)

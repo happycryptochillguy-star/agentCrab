@@ -43,13 +43,42 @@ class Settings(BaseSettings):
     # Proxy for geo-blocked Polymarket APIs (empty = direct)
     polymarket_proxy: str = ""
 
+    # Proxy for geo-blocked Telegram API (empty = direct)
+    telegram_proxy: str = ""
+
     # Auth
     signature_max_age_seconds: int = 300  # 5 minutes
 
     # SQLite
     db_path: str = "agentcrab.db"
 
+    # Telegram alerts
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+
+    # Bark push notifications (iOS)
+    bark_url: str = ""  # e.g. https://api.day.app/YOUR_KEY
+
+    # Admin
+    admin_key: str = ""
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 
 settings = Settings()
+
+
+def reload_settings() -> dict[str, tuple]:
+    """Re-read .env and update the global settings object in-place.
+
+    Returns {field_name: (old_value, new_value)} for fields that changed.
+    """
+    new = Settings()
+    changes: dict[str, tuple] = {}
+    for field_name in Settings.model_fields:
+        old_val = getattr(settings, field_name)
+        new_val = getattr(new, field_name)
+        if old_val != new_val:
+            changes[field_name] = (old_val, new_val)
+            object.__setattr__(settings, field_name, new_val)
+    return changes

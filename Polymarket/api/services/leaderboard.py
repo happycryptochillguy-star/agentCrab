@@ -9,15 +9,20 @@ from api.models import LeaderboardEntry, Position, Trade
 
 logger = logging.getLogger("agentcrab.leaderboard")
 
-# Polymarket leaderboard API (part of the data API / gamma API ecosystem)
-LEADERBOARD_URL = "https://data-api.polymarket.com"
+
+def _client_kwargs() -> dict:
+    """Build httpx client kwargs with proxy if configured."""
+    kwargs: dict = {"timeout": 30}
+    if settings.polymarket_proxy:
+        kwargs["proxy"] = settings.polymarket_proxy
+    return kwargs
 
 
 async def get_leaderboard(limit: int = 20, offset: int = 0) -> list[LeaderboardEntry]:
     """Get top traders leaderboard."""
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(**_client_kwargs()) as client:
         resp = await client.get(
-            f"{LEADERBOARD_URL}/leaderboard",
+            f"{settings.data_api_url}/leaderboard",
             params={"limit": limit, "offset": offset},
         )
         resp.raise_for_status()
@@ -41,7 +46,7 @@ async def get_leaderboard(limit: int = 20, offset: int = 0) -> list[LeaderboardE
 
 async def get_trader_positions(address: str) -> list[Position]:
     """Get positions for any trader by wallet address."""
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(**_client_kwargs()) as client:
         resp = await client.get(
             f"{settings.data_api_url}/positions",
             params={"user": address},
@@ -69,7 +74,7 @@ async def get_trader_positions(address: str) -> list[Position]:
 
 async def get_trader_trades(address: str, limit: int = 50, offset: int = 0) -> list[Trade]:
     """Get trade history for any trader."""
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(**_client_kwargs()) as client:
         resp = await client.get(
             f"{settings.data_api_url}/trades",
             params={"user": address, "limit": limit, "offset": offset},

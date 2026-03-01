@@ -1,5 +1,6 @@
 """General Gamma API client for all-category market search."""
 
+import asyncio
 import json
 import logging
 
@@ -9,6 +10,14 @@ from api.config import settings
 from api.models import GammaEvent, GammaMarketDetail, Market, MarketOutcome
 
 logger = logging.getLogger("agentcrab.gamma")
+
+
+def _client_kwargs() -> dict:
+    """Build httpx client kwargs with proxy if configured."""
+    kwargs: dict = {"timeout": 30}
+    if settings.polymarket_proxy:
+        kwargs["proxy"] = settings.polymarket_proxy
+    return kwargs
 
 
 def _parse_float(val) -> float | None:
@@ -68,10 +77,26 @@ async def search_events(
     offset: int = 0,
     closed: bool = False,
 ) -> list[GammaEvent]:
-    """Search events across all categories on Gamma API."""
+    """Search events across all categories on Gamma API.
+
+    NOTE: Gamma API's `title` param does NOT filter by title — it's ignored.
+    We fetch a larger batch and do client-side title matching when `query` is set.
+    The `tag_slug` param works correctly for category filtering.
+    """
+    # Gamma API ignores the `title` param, so we fetch more and filter client-side.
+    # Without a tag, we need a large fetch because the target events may be far down
+    # the volume-sorted list. With a tag, fewer results so smaller multiplier suffices.
+    if query and not tag:
+        fetch_limit = max(limit * 10, 500)
+    elif query:
+        fetch_limit = limit * 5
+    else:
+        fetch_limit = limit
+    fetch_offset = 0 if query else offset
+
     params: dict = {
-        "limit": limit,
-        "offset": offset,
+        "limit": fetch_limit,
+        "offset": fetch_offset,
         "order": "volume",
         "ascending": "false",
         "active": "true",
@@ -79,10 +104,8 @@ async def search_events(
     }
     if tag:
         params["tag_slug"] = tag
-    if query:
-        params["title"] = query  # Gamma API filters by title substring
 
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(**_client_kwargs()) as client:
         resp = await client.get(f"{settings.gamma_api_url}/events", params=params)
         resp.raise_for_status()
         raw_events = resp.json()
@@ -106,12 +129,18 @@ async def search_events(
             )
         )
 
+    # Client-side title filtering (Gamma API doesn't support text search)
+    if query:
+        q_lower = query.lower()
+        events = [e for e in events if q_lower in e.title.lower()]
+        events = events[offset : offset + limit]
+
     return events
 
 
 async def get_event_by_id(event_id: str) -> GammaEvent | None:
     """Get a specific event by ID."""
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(**_client_kwargs()) as client:
         resp = await client.get(f"{settings.gamma_api_url}/events/{event_id}")
         if resp.status_code == 404:
             return None
@@ -136,7 +165,7 @@ async def get_event_by_id(event_id: str) -> GammaEvent | None:
 
 async def get_event_by_slug(slug: str) -> GammaEvent | None:
     """Get a specific event by slug."""
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(**_client_kwargs()) as client:
         resp = await client.get(f"{settings.gamma_api_url}/events/slug/{slug}")
         if resp.status_code == 404:
             return None
@@ -161,7 +190,7 @@ async def get_event_by_slug(slug: str) -> GammaEvent | None:
 
 async def get_market_by_id(market_id: str) -> GammaMarketDetail | None:
     """Get a specific market by ID."""
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(**_client_kwargs()) as client:
         resp = await client.get(f"{settings.gamma_api_url}/markets/{market_id}")
         if resp.status_code == 404:
             return None
@@ -200,7 +229,52 @@ async def get_market_by_id(market_id: str) -> GammaMarketDetail | None:
 
 async def get_tags() -> list[dict]:
     """Get all available Polymarket tags."""
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(**_client_kwargs()) as client:
         resp = await client.get(f"{settings.gamma_api_url}/tags")
         resp.raise_for_status()
         return resp.json()
+
+
+async def browse_by_tags(
+    tag_slugs: list[str],
+    query: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+    closed: bool = False,
+) -> list[GammaEvent]:
+    """Fetch events for multiple tag slugs, deduplicate, and sort by volume.
+
+    If 1 slug: single call. If multiple: parallel calls, merge results.
+    """
+    if not tag_slugs:
+        return []
+
+    if len(tag_slugs) == 1:
+        return await search_events(
+            query=query, tag=tag_slugs[0], limit=limit, offset=offset, closed=closed
+        )
+
+    # Multiple slugs: fetch in parallel (each with generous limit), then merge
+    per_slug_limit = max(limit, 50)
+
+    async def _fetch_slug(slug: str) -> list[GammaEvent]:
+        return await search_events(
+            query=query, tag=slug, limit=per_slug_limit, offset=0, closed=closed
+        )
+
+    results = await asyncio.gather(*[_fetch_slug(s) for s in tag_slugs])
+
+    # Deduplicate by event_id
+    seen: set[str] = set()
+    merged: list[GammaEvent] = []
+    for events in results:
+        for ev in events:
+            if ev.event_id not in seen:
+                seen.add(ev.event_id)
+                merged.append(ev)
+
+    # Sort by volume descending
+    merged.sort(key=lambda e: e.volume or 0, reverse=True)
+
+    # Apply offset/limit
+    return merged[offset : offset + limit]

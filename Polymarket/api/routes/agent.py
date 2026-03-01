@@ -1,8 +1,27 @@
+from eth_account import Account
 from fastapi import APIRouter
 
 from api.config import settings
+from api.models import SuccessResponse
 
 router = APIRouter(prefix="/agent", tags=["agent"])
+
+
+@router.post("/create-wallet")
+async def create_wallet():
+    """Create a new wallet (EOA). Free, no auth required.
+
+    Returns address + private key. Works on both BSC (payment) and Polygon (trading).
+    The agent should save the private key and tell the human to fund the address with USDT + BNB on BSC.
+    """
+    acct = Account.create()
+    return SuccessResponse(
+        summary=f"Wallet created: {acct.address}. Fund with USDT + BNB on BSC to start using paid features.",
+        data={
+            "address": acct.address,
+            "private_key": f"0x{acct.key.hex()}",
+        },
+    )
 
 
 @router.get("/capabilities")
@@ -10,7 +29,7 @@ async def get_capabilities():
     """Return full API capabilities for agent discovery. Free, no auth required."""
     return {
         "status": "ok",
-        "summary": "agentCrab Polymarket middleware capabilities. Full-stack trading middleware for AI agents.",
+        "summary": "agentCrab Polymarket middleware capabilities. Full-stack trading middleware for AI agents. All paths below are relative to /polymarket.",
         "data": {
             "auth": {
                 "method": "EIP-191 personal_sign",
@@ -27,7 +46,6 @@ async def get_capabilities():
                     "X-Poly-Api-Key": "Polymarket L2 API key (for trading endpoints)",
                     "X-Poly-Secret": "Polymarket L2 secret",
                     "X-Poly-Passphrase": "Polymarket L2 passphrase",
-                    "X-Poly-Address": "Your Polygon wallet address (for trading/positions)",
                 },
             },
             "payment": {
@@ -92,14 +110,24 @@ async def get_capabilities():
                         "description": "Check if the API is running.",
                     },
                     {
+                        "path": "/agent/create-wallet",
+                        "method": "POST",
+                        "description": "Create a new wallet. Returns address + private key. No auth needed.",
+                    },
+                    {
                         "path": "/agent/capabilities",
                         "method": "GET",
                         "description": "This endpoint. Returns full API capabilities for agent discovery.",
                     },
                     {
+                        "path": "/markets/categories",
+                        "method": "GET",
+                        "description": "Hierarchical market category taxonomy (politics, sports, crypto, etc.). Use category paths with /markets/browse.",
+                    },
+                    {
                         "path": "/markets/tags",
                         "method": "GET",
-                        "description": "Get all Polymarket tag categories.",
+                        "description": "Get all raw Polymarket tags (use /markets/categories for organized browsing).",
                     },
                     {
                         "path": "/trading/setup",
@@ -110,6 +138,16 @@ async def get_capabilities():
                         "path": "/trading/contracts",
                         "method": "GET",
                         "description": "Polygon contract addresses + approval instructions.",
+                    },
+                    {
+                        "path": "/markets/history/sync",
+                        "method": "POST",
+                        "description": "Trigger sync of historical (closed) events from Polymarket. Auth required, no payment. Throttled to 1 hour.",
+                    },
+                    {
+                        "path": "/traders/categories/sync",
+                        "method": "POST",
+                        "description": "Trigger category leaderboard sync. Auth required, no payment. Throttled to 2 hours.",
                     },
                     {
                         "path": "/trading/prepare-deploy-safe",
@@ -196,10 +234,16 @@ async def get_capabilities():
                 ],
                 "paid_markets": [
                     {
+                        "path": "/markets/browse",
+                        "method": "GET",
+                        "description": "Browse markets by category (e.g. sports.nba, crypto.bitcoin, politics.trump). Use /markets/categories to discover paths.",
+                        "params": {"category": "str (required, dot path)", "limit": "int (1-100)", "offset": "int", "closed": "bool"},
+                    },
+                    {
                         "path": "/markets/search",
                         "method": "GET",
-                        "description": "Search events across all Polymarket categories.",
-                        "params": {"query": "str?", "tag": "str?", "limit": "int (1-100)", "offset": "int"},
+                        "description": "Search events across all Polymarket categories. Supports optional category filter.",
+                        "params": {"query": "str?", "tag": "str?", "category": "str? (dot path, e.g. sports.nba)", "limit": "int (1-100)", "offset": "int"},
                     },
                     {
                         "path": "/markets/events/{event_id}",
@@ -215,6 +259,12 @@ async def get_capabilities():
                         "path": "/markets/{market_id}",
                         "method": "GET",
                         "description": "Get market details by ID.",
+                    },
+                    {
+                        "path": "/markets/history",
+                        "method": "GET",
+                        "description": "Search historical (closed) events with resolution data. Supports query and category filters.",
+                        "params": {"query": "str?", "category": "str? (prefix match, e.g. politics, sports.soccer)", "limit": "int (1-100)", "offset": "int"},
                     },
                 ],
                 "paid_orderbook": [
@@ -243,17 +293,17 @@ async def get_capabilities():
                     {
                         "path": "/positions",
                         "method": "GET",
-                        "description": "Your Polymarket positions + P&L. Requires X-Poly-Address header.",
+                        "description": "Your Polymarket positions + P&L. Server derives address from your wallet.",
                     },
                     {
                         "path": "/positions/trades",
                         "method": "GET",
-                        "description": "Your trade history. Requires X-Poly-Address header.",
+                        "description": "Your trade history. Server derives address from your wallet.",
                     },
                     {
                         "path": "/positions/activity",
                         "method": "GET",
-                        "description": "Your on-chain activity. Requires X-Poly-Address header.",
+                        "description": "Your on-chain activity. Server derives address from your wallet.",
                     },
                 ],
                 "paid_traders": [
@@ -273,14 +323,32 @@ async def get_capabilities():
                         "method": "GET",
                         "description": "Another trader's trade history.",
                     },
+                    {
+                        "path": "/traders/categories/leaderboard",
+                        "method": "GET",
+                        "description": "Category leaderboard — top traders in a specific category (e.g. crypto, sports.nba). Synced every 4h from top 200 global traders.",
+                        "params": {"category": "str (required, dot path)", "sort_by": "pnl|volume|positions|win_rate", "limit": "int (1-100)", "offset": "int"},
+                    },
+                    {
+                        "path": "/traders/categories/{address}/profile",
+                        "method": "GET",
+                        "description": "A trader's per-category performance breakdown. Optionally filter to one category for position details.",
+                        "params": {"category": "str? (optional, dot path)"},
+                    },
+                    {
+                        "path": "/traders/categories/stats",
+                        "method": "GET",
+                        "description": "Category aggregate stats: total traders, volume, avg PnL, best/worst performers.",
+                        "params": {"category": "str (required, dot path)"},
+                    },
                 ],
                 "paid_trading": [
                     {
-                        "path": "/trading/order",
+                        "path": "/trading/submit-order",
                         "method": "POST",
-                        "description": "Place order (limit/market). Requires L2 headers.",
-                        "body": {"token_id": "str", "side": "BUY|SELL", "size": "float", "price": "float", "order_type": "GTC|GTD|FOK|FAK"},
-                        "extra_headers": ["X-Poly-Api-Key", "X-Poly-Secret", "X-Poly-Passphrase", "X-Poly-Address"],
+                        "description": "Submit signed order to Polymarket CLOB. Requires L2 headers.",
+                        "body": {"signature": "str", "clob_order": "dict (from prepare-order)", "order_type": "GTC|GTD|FOK|FAK"},
+                        "extra_headers": ["X-Poly-Api-Key", "X-Poly-Secret", "X-Poly-Passphrase"],
                     },
                     {
                         "path": "/trading/order/{order_id}",

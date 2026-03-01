@@ -140,6 +140,15 @@ class GammaMarketDetail(BaseModel):
     image: str | None = None
 
 
+# === Category Models ===
+
+class CategoryInfo(BaseModel):
+    id: str
+    label: str
+    description: str | None = None
+    subcategories: list["CategoryInfo"] | None = None
+
+
 # === Orderbook Models ===
 
 class OrderbookLevel(BaseModel):
@@ -261,3 +270,44 @@ class LeaderboardEntry(BaseModel):
     pnl: str | None = None
     positions_count: int | None = None
     trades_count: int | None = None
+
+
+# === Category Leaderboard Models ===
+
+class CategoryLeaderboardEntry(BaseModel):
+    rank: int
+    address: str
+    display_name: str | None = None
+    total_positions: int = 0
+    total_pnl: float = 0
+    total_volume: float = 0
+    win_rate: float | None = None
+    best_pnl_market: str | None = None
+    best_pnl_value: float | None = None
+
+
+class TraderCategoryStats(BaseModel):
+    category_path: str
+    total_positions: int = 0
+    total_pnl: float = 0
+    total_volume: float = 0
+    win_rate: float | None = None
+    best_pnl_market: str | None = None
+    best_pnl_value: float | None = None
+
+
+class TraderCategoryProfile(BaseModel):
+    address: str
+    display_name: str | None = None
+    categories: list[TraderCategoryStats]
+    positions: list[Position] | None = None
+
+
+class CategoryStatsResponse(BaseModel):
+    category_path: str
+    total_traders: int = 0
+    total_volume: float = 0
+    avg_pnl: float = 0
+    best_trader_address: str | None = None
+    best_trader_pnl: float | None = None
+    worst_trader_pnl: float | None = None
