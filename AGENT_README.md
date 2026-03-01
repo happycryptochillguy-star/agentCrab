@@ -1,35 +1,70 @@
 # agentCrab — AI Middleware for Polymarket
 
-Simple HTTP API that gives any AI agent full Polymarket access: browse markets, deposit, trade, check positions. Every response has a `summary` you can relay to the human.
+Simple HTTP API that gives any AI agent full Polymarket access: browse markets, deposit, trade, check positions.
 
-**Pricing**: 0.01 USDT/call on BSC &nbsp;|&nbsp; **Base URL**: `http://localhost:8000/polymarket` (local) or `https://api.agentcrab.ai/polymarket` (production)
+**Pricing**: 0.01 USDT/call on BSC | **Base URL**: `https://api.agentcrab.ai/polymarket`
 
 ---
 
-## Agent Rules
+## Agent Rules (MUST follow)
 
-**Be reactive, not proactive.**
+**1. NEVER write code. You are an HTTP client.**
+- Use your built-in HTTP tools (fetch, curl, web requests) to call the API directly
+- Do NOT generate Python scripts, JavaScript files, or any standalone code
+- The ONLY exception: signing transactions requires minimal inline code — see [Auth & Signing guide](docs/auth-and-signing.md)
+
+**2. Be reactive, not proactive.**
 - NEVER call any API unless the human explicitly asks
 - After any step completes, STOP and wait for the human's next request
-- Be concise. No jargon. Show results, not process. Don't narrate code.
-- Don't skip payment confirmation for on-chain transactions
+- Be concise. Show results, not process
+
+**3. Check wallet FIRST.**
+- Before ANY paid API call, you MUST have a private key. If you don't have one, immediately ask: "I need a wallet to use paid features. Do you have a private key, or should I create a new wallet for you?"
+- Before ANY paid API call, check balance: `GET /payment/balance`. If zero, tell the user: "Your balance is 0. You need to deposit USDT to use paid features. Want me to set up payment?" Do NOT call any paid endpoint until balance > 0.
+- NEVER attempt to transfer funds, write transfer scripts, or interact with blockchain directly. All on-chain operations go through our API.
+
+**4. Tell human about costs upfront.**
+- When the human asks something that requires a paid call, tell them IMMEDIATELY (before calling): "This requires a paid API call (0.01 USDT). You need a funded wallet first."
+- Don't discover the cost after failing — tell them before trying.
 
 ---
 
-## Guides (load only when needed)
+## First Contact Flow
 
-| Guide | When to load | File |
-|-------|-------------|------|
-| Auth & Signing | Before your first API call — how to build auth headers and sign transactions | [docs/auth-and-signing.md](docs/auth-and-signing.md) |
-| Wallet & Payment | Human wants to create a wallet or set up payment | [docs/wallet-and-payment.md](docs/wallet-and-payment.md) |
-| Enable Trading | Human wants to place their first trade (one-time setup) | [docs/enable-trading.md](docs/enable-trading.md) |
-| Place Orders | Human wants to buy/sell on a market | [docs/place-orders.md](docs/place-orders.md) |
+When the human first asks you to do anything with Polymarket:
+
+1. **Do you have a private key?**
+   - YES → go to step 2
+   - NO → ask: "Do you have a BSC private key, or should I create a new wallet?"
+     - Create wallet: `POST /agent/create-wallet` (free, no auth)
+     - Tell human: "Your wallet is `0xABC...`. Send USDT + small BNB (for gas) to this address on BSC."
+     - STOP. Wait for human to confirm they funded it.
+
+2. **Is the request free or paid?**
+   - Free requests (`/markets/categories`, `/payment/balance`, etc.) → just call it
+   - Paid requests → go to step 3
+
+3. **Check balance**: `GET /payment/balance`
+   - Has balance → make the paid call
+   - Zero balance → tell human: "Your balance is 0. Want me to set up prepaid deposit first?"
+   - STOP. Don't call paid endpoints with zero balance.
+
+---
+
+## Guides (load when needed)
+
+| Guide | When to load |
+|-------|-------------|
+| [Auth & Signing](docs/auth-and-signing.md) | Before your first API call — how to build headers and sign |
+| [Wallet & Payment](docs/wallet-and-payment.md) | Human wants to set up payment |
+| [Enable Trading](docs/enable-trading.md) | Human wants to place their first trade |
+| [Place Orders](docs/place-orders.md) | Human wants to buy/sell |
 
 ---
 
 ## Market Browsing & Search
 
-The most common operation. Markets are organized in a hierarchical category system. All queries hit Polymarket in real-time — new events appear automatically.
+The most common operation. All responses include a `summary` field — relay it to the human.
 
 ### Quick start
 
@@ -37,13 +72,11 @@ The most common operation. Markets are organized in a hierarchical category syst
 ```
 GET /markets/categories
 ```
-Returns: `politics`, `sports`, `crypto`, `pop_culture`, `tech`, `finance`, `world` — each with subcategories.
 
-**2. Browse** (0.01 USDT):
+**2. Browse by category** (0.01 USDT):
 ```
 GET /markets/browse?category=sports.nba&limit=10
 GET /markets/browse?category=crypto.bitcoin
-GET /markets/browse?category=sports.soccer.epl
 ```
 
 **3. Search** (0.01 USDT):
@@ -52,24 +85,32 @@ GET /markets/search?query=bitcoin
 GET /markets/search?query=Trump&category=crypto
 ```
 
-**4. Historical events** (0.01 USDT) — closed events with resolution data:
+**4. Browse by mood** (0.01 USDT) — for vague requests:
+```
+GET /markets/browse?mood=trending
+GET /markets/browse?mood=controversial
+GET /markets/browse?mood=interesting
+```
+
+**5. Historical events** (0.01 USDT):
 ```
 GET /markets/history?query=bitcoin&limit=5
-GET /markets/history?category=politics
 ```
 
 ### Human says → You call
 
 | Human says | API call |
 |-----------|---------|
+| "What's interesting on Polymarket?" | `GET /markets/browse?mood=interesting` |
+| "Show me trending markets" | `GET /markets/browse?mood=trending` |
+| "Any controversial bets?" | `GET /markets/browse?mood=controversial` |
+| "What's hot right now?" | `GET /markets/browse?mood=trending` |
+| "Show me some fun markets" | `GET /markets/browse?mood=interesting` |
 | "Show me NBA markets" | `GET /markets/browse?category=sports.nba` |
 | "Find Trump crypto markets" | `GET /markets/search?query=Trump&category=crypto` |
 | "What categories are there?" | `GET /markets/categories` |
 | "Search for bitcoin" | `GET /markets/search?query=bitcoin` |
-| "Show me EPL matches" | `GET /markets/browse?category=sports.soccer.epl` |
-| "What are the hottest markets?" | `GET /markets/browse?category=politics&limit=5` |
-| "Show past bitcoin events" | `GET /markets/history?query=bitcoin` |
-| "What political events resolved?" | `GET /markets/history?category=politics` |
+| "What are the hottest markets?" | `GET /markets/browse?mood=trending` |
 
 ### Category paths
 
@@ -92,40 +133,24 @@ Use dot-separated paths: `{top}`, `{top}.{sub}`, or `{top}.{sub}.{subsub}`.
 | `pop_culture.tweets` | Tweet markets |
 | `tech.ai` | AI markets |
 
+### Mood keywords
+
+| Mood | What it returns |
+|------|----------------|
+| `trending` | Highest volume markets in last 24h |
+| `interesting` | Curated mix across categories — unusual, high-engagement markets |
+| `controversial` | Markets with prices near 50/50 (most divided opinion) |
+| `new` | Recently created markets |
+| `closing_soon` | Markets closing within 7 days |
+
 ---
 
 ## Category Leaderboard
-
-See who's best at what. Data synced every 4 hours from top 200 global traders.
-
-### Quick start
-
-**1. Top traders in a category** (0.01 USDT):
-```
-GET /traders/categories/leaderboard?category=crypto&limit=5
-GET /traders/categories/leaderboard?category=sports.nba&sort_by=win_rate
-GET /traders/categories/leaderboard?category=politics.trump&sort_by=pnl
-```
-
-**2. Trader's category breakdown** (0.01 USDT):
-```
-GET /traders/categories/{address}/profile
-GET /traders/categories/{address}/profile?category=sports.nba
-```
-
-**3. Category stats** (0.01 USDT):
-```
-GET /traders/categories/stats?category=crypto
-GET /traders/categories/stats?category=sports
-```
-
-### Human says -> You call
 
 | Human says | API call |
 |-----------|---------|
 | "Who's best at crypto?" | `GET /traders/categories/leaderboard?category=crypto` |
 | "Top NBA bettors" | `GET /traders/categories/leaderboard?category=sports.nba` |
-| "Sort by win rate in EPL" | `GET /traders/categories/leaderboard?category=sports.soccer.epl&sort_by=win_rate` |
 | "Show me this trader's strengths" | `GET /traders/categories/{addr}/profile` |
 | "How competitive is politics?" | `GET /traders/categories/stats?category=politics` |
 
@@ -155,7 +180,7 @@ GET /traders/categories/stats?category=sports
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/markets/browse` | Browse by category |
+| GET | `/markets/browse` | Browse by category or mood |
 | GET | `/markets/search` | Search (query + optional category) |
 | GET | `/markets/events/{id}` | Event details |
 | GET | `/markets/{market_id}` | Market details |

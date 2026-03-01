@@ -25,13 +25,61 @@ async def get_categories():
 
 @router.get("/browse")
 async def browse_markets(
-    category: str = Query(..., description="Category path, e.g. 'sports.nba', 'crypto.bitcoin', 'politics.geopolitics.ukraine'"),
+    category: str | None = Query(None, description="Category path, e.g. 'sports.nba', 'crypto.bitcoin'"),
+    mood: str | None = Query(None, description="Mood keyword: trending, interesting, controversial, new, closing_soon"),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     closed: bool = Query(False, description="Include closed events"),
     wallet_address: str = Depends(verify_auth_and_payment),
 ):
-    """Browse markets by category. Resolves category to tag slugs and fetches from Polymarket."""
+    """Browse markets by category or mood. Provide one of 'category' or 'mood'."""
+    if not category and not mood:
+        raise HTTPException(
+            status_code=400,
+            detail=ErrorResponse(
+                error_code="MISSING_PARAM",
+                message="Provide either 'category' (e.g. sports.nba) or 'mood' (e.g. trending, interesting, controversial, new, closing_soon).",
+            ).model_dump(),
+        )
+
+    # --- Mood-based browsing ---
+    if mood:
+        if mood not in gamma_svc.VALID_MOODS:
+            raise HTTPException(
+                status_code=400,
+                detail=ErrorResponse(
+                    error_code="INVALID_MOOD",
+                    message=f"Unknown mood '{mood}'. Valid moods: {', '.join(sorted(gamma_svc.VALID_MOODS))}.",
+                ).model_dump(),
+            )
+
+        try:
+            events = await gamma_svc.browse_by_mood(mood=mood, limit=limit, offset=offset)
+        except Exception:
+            raise HTTPException(
+                status_code=502,
+                detail=ErrorResponse(
+                    error_code="UPSTREAM_ERROR",
+                    message="Failed to fetch markets from Polymarket. Please retry.",
+                ).model_dump(),
+            )
+
+        label = gamma_svc.MOOD_LABELS.get(mood, mood)
+        total = len(events)
+        if total == 0:
+            summary = f"No events found for mood '{mood}'."
+        else:
+            top = max(events, key=lambda e: e.volume or 0)
+            top_vol = f"${top.volume:,.0f}" if top.volume else "N/A"
+            summary = f"{label}: {total} event{'s' if total != 1 else ''}."
+            summary += f" Top: \"{top.title}\" ({top_vol} volume)."
+
+        return SuccessResponse(
+            summary=summary,
+            data=[e.model_dump() for e in events],
+        )
+
+    # --- Category-based browsing ---
     node = resolve_category(category)
     if node is None:
         raise HTTPException(

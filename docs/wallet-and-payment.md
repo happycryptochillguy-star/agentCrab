@@ -2,71 +2,102 @@
 
 ## Create Wallet
 
-**Option A — API call (recommended, works for all agents):**
 ```
 POST /agent/create-wallet
 ```
-No auth needed. Returns:
+
+No auth needed. Response:
 ```json
-{"address": "0x...", "private_key": "0x..."}
-```
-Save the private key securely — it controls both BSC (payment) and Polygon (trading) wallets.
-
-**Option B — Local Python (if your agent can execute code):**
-```python
-from eth_account import Account
-acct = Account.create()
-private_key = acct.key.hex()   # 0x-prefixed
-address = acct.address
+{
+  "status": "ok",
+  "summary": "Wallet created: 0xABC.... Fund with USDT + BNB on BSC to start using paid features.",
+  "data": {
+    "address": "0xABC...",
+    "private_key": "0x123..."
+  }
+}
 ```
 
-After creating a wallet, tell the human: "Your wallet address is `0xABC...`. You need to send USDT + a small amount of BNB (for gas) to this address on BSC before using paid features."
+**After creating, tell the human:**
+> Your wallet address is `0xABC...`. Please send USDT + a small amount of BNB (for gas, ~$0.02 worth) to this address on **BSC (BNB Smart Chain)**. Let me know when done.
 
-**Important**: Private keys must always start with `0x`. If the human provides a key without the prefix, add it.
+Then **STOP and wait**. Do not proceed until the human confirms funding.
+
+**Important**: Private keys must start with `0x`. If the human provides one without the prefix, add it.
 
 ## Payment Setup
 
-Every agentCrab API call costs 0.01 USDT on BSC. Two modes:
+Every paid API call costs **0.01 USDT**. Two modes:
 
-### Prepaid (deposit once, use many — recommended)
+### Prepaid (recommended) — deposit once, use many times
 
-```python
-# 1. Build unsigned deposit tx(s)
-resp = httpx.post(f"{API}/payment/prepare-deposit",
-    json={"amount_usdt": 1.0},  # 1 USDT = 100 calls
-    headers=auth_headers())
-
-# 2. Sign and submit
-sign_and_submit(resp.json()["data"])
-
-# 3. Check balance anytime
-resp = httpx.get(f"{API}/payment/balance", headers=auth_headers())
+**Step 1** — Check current balance (free):
+```
+GET /payment/balance
+Headers: auth headers (see auth-and-signing.md)
 ```
 
-### Direct (pay per call)
+**Step 2** — If balance is 0, build deposit transaction (free):
+```
+POST /payment/prepare-deposit
+Headers: auth headers
+Body: {"amount_usdt": 1.0}
+```
+Response includes unsigned BSC transactions (approve + deposit).
 
-```python
-# 1. Build unsigned pay tx
-resp = httpx.post(f"{API}/payment/prepare-pay", headers=auth_headers())
+**Step 3** — Sign and submit (see auth-and-signing.md for signing):
+```
+POST /payment/submit-tx
+Headers: auth headers
+Body: {"signed_txs": ["0xSIGNED_TX_1", "0xSIGNED_TX_2"], "chain": "bsc"}
+```
 
-# 2. Sign and submit
-result = sign_and_submit(resp.json()["data"])
-tx_hash = result.json()["data"]["tx_hashes"][-1]
+**Step 4** — Verify balance:
+```
+GET /payment/balance
+```
+Should now show the deposited amount. Ready to use paid endpoints.
 
-# 3. Use tx_hash in X-Tx-Hash header for the next paid API call
+### Direct — pay per call
+
+**Step 1** — Build pay transaction (free):
+```
+POST /payment/prepare-pay
+Headers: auth headers
+```
+
+**Step 2** — Sign and submit:
+```
+POST /payment/submit-tx
+Headers: auth headers
+Body: {"signed_txs": ["0xSIGNED_TX"], "chain": "bsc"}
+```
+
+**Step 3** — Use the tx hash in the next paid API call:
+```
+GET /markets/search?query=bitcoin
+Headers: auth headers + X-Tx-Hash: 0xTHE_TX_HASH + X-Payment-Mode: direct
 ```
 
 ## Polymarket Deposit
 
 Fund the Polymarket trading account (USDT on BSC → USDC.e on Polygon):
 
-```python
-# 1. Build unsigned deposit tx
-resp = httpx.post(f"{API}/deposit/prepare-transfer",
-    json={"amount_usdt": 10.0},
-    headers=auth_headers())
-
-# 2. CONFIRM WITH THE HUMAN before signing
-# 3. Sign and submit
-sign_and_submit(resp.json()["data"])
+**Step 1** — Build deposit transaction (free):
 ```
+POST /deposit/prepare-transfer
+Headers: auth headers
+Body: {"amount_usdt": 10.0}
+```
+
+**Step 2** — **CONFIRM WITH THE HUMAN** before signing. Tell them:
+> This will transfer 10 USDT from your BSC wallet to your Polymarket trading account. Proceed?
+
+**Step 3** — Sign and submit:
+```
+POST /payment/submit-tx
+Headers: auth headers
+Body: {"signed_txs": ["0xSIGNED_APPROVE", "0xSIGNED_DEPOSIT"], "chain": "bsc"}
+```
+
+Funds arrive in the Polymarket account automatically (bridged from BSC to Polygon).

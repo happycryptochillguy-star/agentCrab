@@ -227,6 +227,135 @@ async def get_market_by_id(market_id: str) -> GammaMarketDetail | None:
     )
 
 
+VALID_MOODS = {"trending", "interesting", "controversial", "new", "closing_soon"}
+
+MOOD_LABELS = {
+    "trending": "Trending (highest volume)",
+    "interesting": "Interesting (curated mix)",
+    "controversial": "Controversial (most divided opinion)",
+    "new": "New (recently created)",
+    "closing_soon": "Closing Soon (ending within 7 days)",
+}
+
+
+async def browse_by_mood(
+    mood: str, limit: int = 20, offset: int = 0
+) -> list[GammaEvent]:
+    """Fetch events by mood keyword. Each mood maps to a different query strategy."""
+    if mood not in VALID_MOODS:
+        return []
+
+    if mood == "trending":
+        return await _mood_trending(limit, offset)
+    elif mood == "new":
+        return await _mood_new(limit, offset)
+    elif mood == "closing_soon":
+        return await _mood_closing_soon(limit, offset)
+    elif mood == "controversial":
+        return await _mood_controversial(limit, offset)
+    elif mood == "interesting":
+        return await _mood_interesting(limit, offset)
+    return []
+
+
+async def _fetch_events_raw(
+    order: str = "volume",
+    ascending: bool = False,
+    limit: int = 50,
+    offset: int = 0,
+    active: bool = True,
+    closed: bool = False,
+) -> list[GammaEvent]:
+    """Low-level fetch from Gamma with configurable sort."""
+    params: dict = {
+        "limit": limit,
+        "offset": offset,
+        "order": order,
+        "ascending": str(ascending).lower(),
+        "active": str(active).lower(),
+        "closed": str(closed).lower(),
+    }
+    async with httpx.AsyncClient(**_client_kwargs()) as client:
+        resp = await client.get(f"{settings.gamma_api_url}/events", params=params)
+        resp.raise_for_status()
+        raw_events = resp.json()
+
+    events: list[GammaEvent] = []
+    for ev in raw_events:
+        markets = [_parse_market(m) for m in ev.get("markets", [])]
+        events.append(
+            GammaEvent(
+                event_id=str(ev.get("id", "")),
+                title=ev.get("title", ""),
+                slug=ev.get("slug"),
+                description=ev.get("description"),
+                markets=markets,
+                volume=_parse_float(ev.get("volume")),
+                liquidity=_parse_float(ev.get("liquidity")),
+                start_date=ev.get("startDate"),
+                end_date=ev.get("endDate"),
+                tags=_parse_tags(ev),
+                image=ev.get("image"),
+            )
+        )
+    return events
+
+
+async def _mood_trending(limit: int, offset: int) -> list[GammaEvent]:
+    """Highest volume active events."""
+    return await _fetch_events_raw(order="volume", limit=limit, offset=offset)
+
+
+async def _mood_new(limit: int, offset: int) -> list[GammaEvent]:
+    """Most recently created events."""
+    return await _fetch_events_raw(
+        order="startDate", ascending=False, limit=limit, offset=offset
+    )
+
+
+async def _mood_closing_soon(limit: int, offset: int) -> list[GammaEvent]:
+    """Events ending soonest (still active)."""
+    return await _fetch_events_raw(
+        order="endDate", ascending=True, limit=limit, offset=offset
+    )
+
+
+async def _mood_controversial(limit: int, offset: int) -> list[GammaEvent]:
+    """Events where at least one market has outcomes near 50/50 split.
+
+    Fetch top-volume events, filter for markets with price between 0.40–0.60.
+    """
+    batch = await _fetch_events_raw(order="volume", limit=max(limit * 5, 100))
+    controversial: list[GammaEvent] = []
+    for ev in batch:
+        for mkt in ev.markets:
+            prices = [o.price for o in mkt.outcomes if o.price is not None]
+            if any(0.40 <= p <= 0.60 for p in prices):
+                controversial.append(ev)
+                break
+    return controversial[offset : offset + limit]
+
+
+async def _mood_interesting(limit: int, offset: int) -> list[GammaEvent]:
+    """Curated mix: top trending + newest + most controversial, deduplicated."""
+    trending, new, controversial = await asyncio.gather(
+        _mood_trending(limit=10, offset=0),
+        _mood_new(limit=10, offset=0),
+        _mood_controversial(limit=10, offset=0),
+    )
+    seen: set[str] = set()
+    mixed: list[GammaEvent] = []
+    # Interleave: 1 trending, 1 new, 1 controversial, repeat
+    sources = [trending, new, controversial]
+    max_len = max(len(s) for s in sources) if sources else 0
+    for i in range(max_len):
+        for src in sources:
+            if i < len(src) and src[i].event_id not in seen:
+                seen.add(src[i].event_id)
+                mixed.append(src[i])
+    return mixed[offset : offset + limit]
+
+
 async def get_tags() -> list[dict]:
     """Get all available Polymarket tags."""
     async with httpx.AsyncClient(**_client_kwargs()) as client:

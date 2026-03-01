@@ -156,9 +156,21 @@ async def prepare_transfer(
             "data": raw_tx["data"],
             "value": int(raw_tx.get("value", "0")),
             "chainId": raw_tx["chainId"],
-            "gas": int(raw_tx["gas"]),
             "nonce": nonce,
         }
+        # Gas: use API value if provided, otherwise estimate on-chain
+        if raw_tx.get("gas") is not None:
+            tx["gas"] = int(raw_tx["gas"])
+        else:
+            try:
+                tx["gas"] = w3.eth.estimate_gas({
+                    "from": tx["from"],
+                    "to": tx["to"],
+                    "data": raw_tx["data"],
+                    "value": tx["value"],
+                })
+            except Exception:
+                tx["gas"] = 200_000  # safe fallback for depositErc20
         if "maxFeePerGas" in raw_tx:
             tx["maxFeePerGas"] = int(raw_tx["maxFeePerGas"])
             tx["maxPriorityFeePerGas"] = int(raw_tx["maxPriorityFeePerGas"])

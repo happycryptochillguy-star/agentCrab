@@ -1,34 +1,40 @@
 # Placing Orders
 
-Orders follow the prepare → sign → submit pattern.
+Orders follow the **prepare → sign → submit** pattern. Requires L2 credentials (see [Enable Trading](enable-trading.md)).
+
+## Buy / Sell
+
+**Step 1** — Prepare order (free):
+```
+POST /trading/prepare-order
+Headers: auth headers
+Body: {"token_id": "TOKEN_ID", "side": "BUY", "size": 5.0, "price": 0.65}
+```
+
+Response includes:
+- `summary` — human-readable: "BUY 5 shares of 'Yes' on 'Will X happen?' @ $0.65 ($3.25 total)"
+- `typed_data` — EIP-712 data to sign
+- `clob_order` — order payload for submission
+
+**Tell the human the summary and confirm before signing.**
+
+**Step 2** — Sign (EIP-712):
 
 ```python
-# ── 1. Prepare order (free) ──
-# Server builds EIP-712 typed data, fetches tick size and fees
-resp = httpx.post(f"{API}/trading/prepare-order",
-    json={"token_id": "...", "side": "BUY", "size": 5.0, "price": 0.65},
-    headers=auth_headers())
-data = resp.json()["data"]
-# data["summary"] = "Order ready: BUY 5 shares of "Yes" on "Will X?" @ $0.65 ($3.25 total)"
-
-# ── 2. Sign EIP-712 typed data ──
 td = data["typed_data"]
-sig = Account.sign_typed_data(
+sig = "0x" + Account.sign_typed_data(
     PRIVATE_KEY, td["domain"], td["types"], td["message"]
 ).signature.hex()
-
-# ── 3. Submit order (paid, 0.01 USDT) ──
-trade_headers = {
-    **auth_headers(),
-    "X-Poly-Api-Key": api_key,
-    "X-Poly-Secret": secret,
-    "X-Poly-Passphrase": passphrase,
-}
-resp = httpx.post(f"{API}/trading/submit-order",
-    json={"signature": f"0x{sig}", "clob_order": data["clob_order"], "order_type": "GTC"},
-    headers=trade_headers)
-# resp.json()["summary"] = "Order filled: bought 5 shares for $3.25 USDC."
 ```
+
+**Step 3** — Submit order (0.01 USDT):
+```
+POST /trading/submit-order
+Headers: auth headers + X-Poly-Api-Key + X-Poly-Secret + X-Poly-Passphrase
+Body: {"signature": "0xSIG", "clob_order": <clob_order from step 1>, "order_type": "GTC"}
+```
+
+Response includes fill status, amounts, and polygonscan URL.
 
 ## Order Types
 
@@ -41,13 +47,20 @@ resp = httpx.post(f"{API}/trading/submit-order",
 
 ## Cancel Orders
 
-```python
-# Cancel single order
-httpx.delete(f"{API}/trading/order/{order_id}", headers=trade_headers)
+Cancel single order (0.01 USDT):
+```
+DELETE /trading/order/{order_id}
+Headers: auth headers + X-Poly-Api-Key + X-Poly-Secret + X-Poly-Passphrase
+```
 
-# Cancel all open orders
-httpx.delete(f"{API}/trading/orders", headers=trade_headers)
+Cancel all open orders (0.01 USDT):
+```
+DELETE /trading/orders
+Headers: auth headers + X-Poly-Api-Key + X-Poly-Secret + X-Poly-Passphrase
+```
 
-# View open orders
-httpx.get(f"{API}/trading/orders", headers=trade_headers)
+View open orders (0.01 USDT):
+```
+GET /trading/orders
+Headers: auth headers + X-Poly-Api-Key + X-Poly-Secret + X-Poly-Passphrase
 ```
