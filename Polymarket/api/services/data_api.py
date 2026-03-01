@@ -62,7 +62,7 @@ async def get_trades(wallet_address: str, limit: int = 50, offset: int = 0) -> l
                 side=t.get("side", ""),
                 size=str(t.get("size", "0")),
                 price=str(t.get("price", "0")),
-                timestamp=t.get("timestamp") or t.get("created_at"),
+                timestamp=str(t.get("timestamp") or t.get("created_at") or ""),
             )
         )
     return trades
@@ -89,7 +89,7 @@ async def get_activity(wallet_address: str, limit: int = 50, offset: int = 0) ->
                 type=a.get("type", ""),
                 token_id=a.get("asset") or a.get("token_id"),
                 amount=str(a.get("amount", "")) or None,
-                timestamp=a.get("timestamp") or a.get("created_at"),
+                timestamp=str(a.get("timestamp") or a.get("created_at") or ""),
                 tx_hash=a.get("transactionHash") or a.get("tx_hash"),
             )
         )

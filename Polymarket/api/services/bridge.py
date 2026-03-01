@@ -18,8 +18,57 @@ from api.models import (
 
 logger = logging.getLogger("agentcrab.bridge")
 
-# Polymarket Bridge API base URL (part of the CLOB API)
-BRIDGE_API_URL = settings.clob_api_url
+# Polymarket Bridge API base URL
+BRIDGE_API_URL = settings.bridge_api_url
+
+# BSC USDT (18 decimals) and Polygon USDC.e (6 decimals)
+BSC_USDT = "0x55d398326f99059fF775485246999027B3197955"
+POLYGON_USDC_E = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+
+
+def _client_kwargs() -> dict:
+    """Build httpx client kwargs with proxy if configured."""
+    kwargs: dict = {"timeout": 30}
+    if settings.polymarket_proxy:
+        kwargs["proxy"] = settings.polymarket_proxy
+    return kwargs
+
+
+async def get_funxyz_deposit_quote(
+    user_address: str, safe_address: str, to_amount_usdc: int
+) -> dict:
+    """Get a deposit quote from fun.xyz (Polymarket's relay provider).
+
+    Calls POST /v1/checkout/quoteV2 with BSC USDT → Polygon USDC.e.
+    Returns the full response including pre-built transactions (approve +
+    depositErc20) ready for the agent to sign, plus fee breakdown.
+
+    Args:
+        user_address: EOA wallet address (sender on BSC)
+        safe_address: Polymarket Safe address (recipient on Polygon)
+        to_amount_usdc: Desired USDC.e output in base units (6 decimals)
+    """
+    async with httpx.AsyncClient(**_client_kwargs()) as client:
+        resp = await client.post(
+            f"{settings.fun_xyz_api_url}/v1/checkout/quoteV2",
+            headers={
+                "x-api-key": settings.fun_xyz_api_key,
+                "Origin": "https://polymarket.com",
+                "Referer": "https://polymarket.com/",
+            },
+            json={
+                "actionParams": [],
+                "fromChainId": "56",
+                "fromTokenAddress": BSC_USDT,
+                "recipientAddress": safe_address,
+                "toAmountBaseUnit": hex(to_amount_usdc),
+                "toChainId": "137",
+                "toTokenAddress": POLYGON_USDC_E,
+                "userAddress": user_address,
+            },
+        )
+        resp.raise_for_status()
+        return resp.json()
 
 
 async def create_deposit_address(polymarket_address: str) -> DepositCreateResponse:
@@ -30,7 +79,7 @@ async def create_deposit_address(polymarket_address: str) -> DepositCreateRespon
     any supported chain (BSC, Ethereum, Polygon, Arbitrum, Base, etc.) and
     Polymarket automatically bridges to USDC.e on Polygon.
     """
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(**_client_kwargs()) as client:
         resp = await client.post(
             f"{BRIDGE_API_URL}/deposit",
             json={"address": polymarket_address},
@@ -62,7 +111,7 @@ async def create_withdraw_address(
     Calls Polymarket's POST /withdraw endpoint. User sends USDC.e on Polygon
     to the returned address, and Polymarket bridges to the destination chain/token.
     """
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(**_client_kwargs()) as client:
         resp = await client.post(
             f"{BRIDGE_API_URL}/withdraw",
             json={
@@ -92,7 +141,7 @@ async def get_supported_assets() -> list[dict]:
 
     Calls Polymarket's GET /supported-assets endpoint.
     """
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(**_client_kwargs()) as client:
         resp = await client.get(f"{BRIDGE_API_URL}/supported-assets")
         resp.raise_for_status()
         return resp.json()

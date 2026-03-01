@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import time
 from collections import defaultdict
@@ -10,7 +9,6 @@ from fastapi.responses import JSONResponse
 
 from api.config import settings
 from api.services.balance import init_db
-from api.services.payment import deposit_scanner_loop
 from api.routes import agent, football, payment, deposit, markets, orderbook, positions, traders, trading
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -38,27 +36,10 @@ def _check_rate_limit(client_ip: str) -> bool:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
     logger.info("Initializing database...")
     await init_db()
-
-    # Start background deposit scanner (only if contract is configured)
-    scanner_task = None
-    if settings.contract_address:
-        logger.info("Starting deposit scanner (interval: %ds)...", settings.scanner_interval_seconds)
-        scanner_task = asyncio.create_task(deposit_scanner_loop())
-    else:
-        logger.warning("CONTRACT_ADDRESS not set — deposit scanner disabled")
-
+    logger.info("Startup complete")
     yield
-
-    # Shutdown
-    if scanner_task:
-        scanner_task.cancel()
-        try:
-            await scanner_task
-        except asyncio.CancelledError:
-            pass
     logger.info("Shutdown complete")
 
 

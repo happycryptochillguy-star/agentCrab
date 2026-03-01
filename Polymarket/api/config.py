@@ -19,18 +19,32 @@ class Settings(BaseSettings):
     # CLOB API
     clob_api_url: str = "https://clob.polymarket.com"
 
+    # Bridge API (deposits/withdrawals)
+    bridge_api_url: str = "BRIDGE_URL_FROM_ENV"
+
+    # fun.xyz (Polymarket deposit relay)
+    fun_xyz_api_url: str = "FUN_XYZ_URL_FROM_ENV"
+    fun_xyz_api_key: str = ""
+
     # Data API
     data_api_url: str = "https://data-api.polymarket.com"
 
     # Polygon (Polymarket settlement chain)
+    polygon_rpc_url: str = ""
     polygon_chain_id: int = 137
     polygon_usdc_address: str = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"  # USDC.e
 
+    # Polymarket Builder (relayer for gasless Polygon ops)
+    poly_builder_api_key: str = ""
+    poly_builder_secret: str = ""
+    poly_builder_passphrase: str = ""
+    relayer_url: str = "RELAYER_URL_FROM_ENV"
+
+    # Proxy for geo-blocked Polymarket APIs (empty = direct)
+    polymarket_proxy: str = ""
+
     # Auth
     signature_max_age_seconds: int = 300  # 5 minutes
-
-    # Background scanner
-    scanner_interval_seconds: int = 15
 
     # SQLite
     db_path: str = "agentcrab.db"

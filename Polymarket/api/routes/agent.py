@@ -112,6 +112,16 @@ async def get_capabilities():
                         "description": "Polygon contract addresses + approval instructions.",
                     },
                     {
+                        "path": "/trading/prepare-deploy-safe",
+                        "method": "POST",
+                        "description": "Check if Safe is deployed; if not, returns CreateProxy EIP-712 typed data for signing. Auth required, no payment.",
+                    },
+                    {
+                        "path": "/trading/prepare-enable",
+                        "method": "POST",
+                        "description": "Get SafeTx hash (for gasless token approvals) + CLOB typed data (for L2 credentials). Requires Safe deployed. Auth required, no payment.",
+                    },
+                    {
                         "path": "/payment/balance",
                         "method": "GET",
                         "description": "Check agentCrab prepaid balance. Auth required, no payment.",
@@ -122,16 +132,59 @@ async def get_capabilities():
                         "description": "Verify agentCrab payment transaction. Auth required, no payment.",
                     },
                     {
+                        "path": "/payment/prepare-deposit",
+                        "method": "POST",
+                        "description": "Build unsigned BSC transactions for prepaid deposit. Auth required, no payment.",
+                        "body": {"amount_usdt": "float (e.g. 1.0 = 100 calls)"},
+                    },
+                    {
+                        "path": "/payment/prepare-pay",
+                        "method": "POST",
+                        "description": "Build unsigned BSC transaction for a single direct payment (0.01 USDT). Auth required, no payment.",
+                    },
+                    {
+                        "path": "/payment/submit-tx",
+                        "method": "POST",
+                        "description": "Broadcast a signed BSC transaction. Auth required, no payment.",
+                        "body": {"signed_tx": "str (hex-encoded signed raw transaction)"},
+                    },
+                    {
                         "path": "/deposit/supported-assets",
                         "method": "GET",
                         "description": "List supported chains/tokens for Polymarket deposits.",
                     },
                 ],
+                "paid_account_setup": [
+                    {
+                        "path": "/trading/submit-deploy-safe",
+                        "method": "POST",
+                        "description": "Deploy Safe wallet via Polymarket relayer (gasless). 0.01 USDT per call.",
+                        "body": {"signature": "str (0x-prefixed hex, from sign_typed_data)"},
+                    },
+                    {
+                        "path": "/trading/submit-approvals",
+                        "method": "POST",
+                        "description": "Submit token approvals via Polymarket relayer (gasless). 0.01 USDT per call.",
+                        "body": {"signature": "str (personal_sign of SafeTx hash)", "approval_data": "dict (from prepare-enable)"},
+                    },
+                    {
+                        "path": "/trading/submit-credentials",
+                        "method": "POST",
+                        "description": "Submit EIP-712 signature to derive Polymarket L2 API credentials. 0.01 USDT per call.",
+                        "body": {"signature": "str (0x-prefixed hex)", "timestamp": "str (from prepare-enable)"},
+                    },
+                ],
                 "paid_deposit": [
+                    {
+                        "path": "/deposit/prepare-transfer",
+                        "method": "POST",
+                        "description": "One-step Polymarket deposit: gets deposit address from Polymarket bridge and builds unsigned BSC USDT transfer. Agent signs and submits via /payment/submit-tx.",
+                        "body": {"amount_usdt": "float (amount to deposit)"},
+                    },
                     {
                         "path": "/deposit/create",
                         "method": "POST",
-                        "description": "Get deposit addresses for funding Polymarket. Returns EVM/Solana/BTC addresses. Send tokens to the EVM address from any supported chain.",
+                        "description": "Get deposit addresses for funding Polymarket. Returns EVM/Solana/BTC addresses.",
                         "body": {"polymarket_address": "str (Polygon wallet address)"},
                     },
                     {
@@ -162,12 +215,6 @@ async def get_capabilities():
                         "path": "/markets/{market_id}",
                         "method": "GET",
                         "description": "Get market details by ID.",
-                    },
-                    {
-                        "path": "/football/markets",
-                        "method": "GET",
-                        "description": "Get football/soccer markets (legacy, backward compatible).",
-                        "params": {"league": "str?", "limit": "int (1-100)", "offset": "int"},
                     },
                 ],
                 "paid_orderbook": [
@@ -314,27 +361,36 @@ async def get_capabilities():
                 "window_seconds": 60,
                 "scope": "per IP address",
             },
-            "workflow": {
+            "workflow_reference": {
+                "note": "These describe how each flow works. Only execute when the user requests it.",
+                "agentcrab_payment": [
+                    "POST /payment/prepare-deposit — server builds unsigned BSC transactions",
+                    "Agent signs each transaction locally with eth_account.sign_transaction()",
+                    "POST /payment/submit-tx — server broadcasts to BSC",
+                    "Balance available immediately for API calls",
+                ],
                 "deposit": [
-                    "1. GET /deposit/supported-assets — see supported chains/tokens",
-                    "2. POST /deposit/create — get deposit addresses (EVM, Solana, BTC)",
-                    "3. Agent sends supported tokens (USDT, USDC, etc.) to the EVM deposit address from any chain",
-                    "4. Polymarket automatically bridges funds to USDC.e on Polygon",
+                    "POST /deposit/prepare-transfer — server builds unsigned BSC depositErc20 transaction",
+                    "Agent signs the transaction locally",
+                    "POST /payment/submit-tx — server broadcasts to BSC",
+                    "Polymarket automatically bridges funds to USDC.e on Polygon",
                 ],
                 "withdraw": [
-                    "1. POST /deposit/withdraw — get withdrawal address for destination chain",
-                    "2. Agent sends USDC.e on Polygon to the returned address",
-                    "3. Polymarket bridges funds to destination chain/token",
+                    "POST /deposit/withdraw — get withdrawal address for destination chain",
+                    "Agent sends USDC.e on Polygon to the returned address",
+                    "Polymarket bridges funds to destination chain/token",
                 ],
-                "trading": [
-                    "1. GET /trading/setup — learn how to derive L2 credentials",
-                    "2. Agent derives L2 creds locally (one-time, using py-clob-client)",
-                    "3. GET /trading/contracts — get Polygon contract addresses for token approvals",
-                    "4. Agent approves tokens on Polygon (one-time)",
-                    "5. GET /markets/search — find markets",
-                    "6. GET /orderbook/{token_id} — check prices",
-                    "7. POST /trading/order — place order (with L2 headers)",
-                    "8. GET /positions — track positions and P&L",
+                "deploy_safe": [
+                    "POST /trading/prepare-deploy-safe — check if Safe exists, get CreateProxy typed data",
+                    "Agent signs with sign_typed_data()",
+                    "POST /trading/submit-deploy-safe — server deploys Safe via Polymarket relayer (gasless)",
+                ],
+                "enable_trading": [
+                    "POST /trading/prepare-enable — returns SafeTx hash + CLOB typed data",
+                    "Agent personal_signs the SafeTx hash (for gasless approvals)",
+                    "POST /trading/submit-approvals — server submits to Polymarket relayer (gasless)",
+                    "Agent signs CLOB typed data with sign_typed_data()",
+                    "POST /trading/submit-credentials — server derives L2 API credentials",
                 ],
             },
         },

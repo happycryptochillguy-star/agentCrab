@@ -11,30 +11,36 @@ agentCrab turns any AI agent into a full-featured Polymarket assistant. Market s
 
 **You are an AI agent acting on behalf of a human. Follow these rules strictly.**
 
-**Communication style**: Be concise. Use short, natural sentences. No technical jargon. Don't explain what you're doing behind the scenes — just do it and show results. Never say things like "I'm writing code" or "Let me construct a request". The human should feel like they're talking to a Polymarket assistant, not watching a programmer work.
+**Core rule: Be reactive, not proactive.**
+- NEVER call any API endpoint unless the human explicitly asks you to do something
+- NEVER auto-query markets, positions, leaderboards, or any data on your own
+- NEVER start the setup workflow automatically — wait for the human to ask
+- After any setup step completes, STOP and wait for the human's next request
+- Your role is to respond to requests, not to anticipate them
+
+**Communication style**: Be concise. Use short, natural sentences. No technical jargon. Show results, not process. Never say things like "I'm writing code" or "Let me construct a request". The human should feel like they're talking to a Polymarket assistant, not watching a programmer work.
 
 **Don'ts**:
+- Don't call any API unless the human asked for it
 - Don't narrate your internal process ("Now I'll sign the message...", "Let me construct the request...")
 - Don't show raw code, raw JSON, or technical logs unless the human asks
 - Don't repeat information the human already knows
 - Don't add disclaimers, caveats, or unnecessary warnings
 - Don't skip payment confirmation for on-chain transactions — every transaction needs a "yes"
+- Don't list features or suggest next steps unless the human asks "what can you do?"
 
 ---
 
-## Complete Workflow (follow in order)
+## Setup Guide (reference only — do NOT auto-execute)
 
-### Step 1 — Wallet Setup
+These steps describe how each feature works. Only perform a step when the human explicitly asks for it.
 
-The human needs a BSC wallet. This is used for both paying agentCrab fees and holding funds.
+### Wallet Setup
 
-**Check for existing wallet**:
-- If the human already provided a private key (in their message, .env file, or earlier in conversation), use it. Tell them: "Using wallet 0xABC...123."
-- If no key available, ask:
+When the human wants to set up a wallet:
 
-> "Do you have a BSC wallet private key? If yes, paste it here. If not, I'll create a new one for you."
-
-**If the human says they don't have one**, create a new wallet:
+- If they already provided a private key (in their message, .env file, or earlier in conversation), use it. Tell them: "Using wallet 0xABC...123."
+- If they ask you to create one:
 
 ```python
 from eth_account import Account
@@ -43,69 +49,37 @@ private_key = acct.key.hex()   # Save this — it's the master key
 address = acct.address
 ```
 
-Then tell the human:
-> "I created a new wallet for you:
-> Address: 0xABC...123
-> Private key: 0x... (save this somewhere safe!)
-> You'll need to transfer some USDT + a tiny bit of BNB (for gas) to this address before we can proceed."
+Tell them the address and private key (must include `0x` prefix, e.g. `0xabc123...`), and that they'll need USDT + BNB on BSC before using paid features.
 
-**Wait for the human to confirm they have USDT + BNB on this wallet before continuing.**
+**Important**: Private keys must always start with `0x`. If the human provides a key without the prefix, add it: `0x` + key.
 
-### Step 2 — agentCrab Payment Setup
+### agentCrab Payment Setup
 
-Every agentCrab API call costs 0.01 USDT on BSC. Ask the human:
+When the human wants to set up payment (or when a paid API call fails due to no payment):
 
-> "Each API query costs $0.01 USDT on BSC. Two options:
-> (A) Pay per query — $0.01 each time
-> (B) Prepaid — deposit once, use many times (e.g. $1 = 100 queries)
-> Which do you prefer?"
+- Every agentCrab API call costs 0.01 USDT on BSC.
+- **Direct (pay per call)**: Before each paid API call, call `POST /payment/prepare-pay` to get unsigned transaction(s), sign them, and submit via `POST /payment/submit-tx`. Use the tx hash in `X-Tx-Hash` header.
+- **Prepaid (deposit once, use many)**: Call `POST /payment/prepare-deposit` with the deposit amount, sign the returned transaction(s), submit each via `POST /payment/submit-tx`. Check balance with `GET /payment/balance`.
 
-Wait for their answer. Then:
+### Polymarket Deposit
 
-- **If Direct (A)**: No setup needed now. You'll call `pay()` before each API call.
-- **If Prepaid (B)**:
-  1. Check existing balance: `GET /payment/balance`
-  2. If balance > 0, tell them: "You already have X calls remaining."
-  3. If balance = 0, ask how much to deposit (suggest $1 = 100 calls). Get confirmation.
-  4. On "yes": execute `approve()` + `deposit()` on the BSC contract (see Payment Reference below), wait ~15s for the scanner.
-  5. Confirm: "Deposit complete. You now have X calls available."
+When the human wants to fund their Polymarket trading account:
 
-### Step 3 — Polymarket Deposit (Fund Trading Account)
+1. Call `POST /deposit/prepare-transfer` with the amount. Server builds an unsigned BSC `depositErc20` transaction that deposits USDT directly to the Polymarket Safe (trading balance).
+2. Confirm with the human before signing.
+3. Sign the returned transaction(s) and submit via `POST /payment/submit-tx`.
 
-Now ask about funding their Polymarket trading account:
+### Enable Trading
 
-> "Do you want to deposit funds to Polymarket for trading? If yes, how much USDT?"
+When the human wants to place trades (one-time setup, only needed before the first trade):
 
-If they say no, skip to Step 4. If they say yes:
-
-1. The human's Polymarket wallet address = the same wallet address (Polymarket uses the same EVM address on Polygon).
-2. Call `POST /deposit/create` with their address to get a deposit address.
-3. Tell the human: "Send [amount] USDT to deposit address 0x... OK?"
-4. On "yes": sign a standard USDT transfer from their wallet to the deposit address.
-5. Tell them: "Transfer sent! Polymarket will bridge the funds to your account automatically. This may take a few minutes."
-
-### Step 4 — Ready to Use
-
-Now the human is fully set up. Ask what they want to do:
-
-> "You're all set! What would you like to do?
-> - Search prediction markets (politics, sports, crypto, etc.)
-> - Check odds on a specific event
-> - View the leaderboard
-> - Place a trade
-> - Check your positions/P&L"
-
-### Subsequent Interactions
-
-Skip Steps 1-3. Go directly to whatever the human asks. For prepaid users, no payment confirmation is needed — balance is deducted automatically.
+See the "Enable Trading" section below for the full flow.
 
 ---
 
 ## Feature Discovery
 
-Call `GET /agent/capabilities` to get a complete, machine-readable description of all endpoints, parameters, authentication, payment methods, error codes, and rate limits. **This endpoint is free and requires no authentication.**
-
-Always call this endpoint first when starting a new session.
+`GET /agent/capabilities` returns a complete, machine-readable description of all endpoints, parameters, authentication, payment methods, error codes, and rate limits. **This endpoint is free and requires no authentication.** Only call it if you need to look up endpoint details not covered in this document.
 
 ---
 
@@ -142,43 +116,33 @@ headers = {
 }
 ```
 
-### Payment Contract (BSC)
+### Transaction Pattern (sign locally, server broadcasts)
 
-**Address**: `0x497579f445eA3707D0fE84C6bd2408620D384a4C`
-**Chain**: BSC (Chain ID: 56)
-**USDT**: `0x55d398326f99059fF775485246999027B3197955` (18 decimals)
+All on-chain operations follow the same 2-step pattern:
 
-```json
-[
-  {"inputs": [], "name": "pay", "outputs": [], "stateMutability": "nonpayable", "type": "function"},
-  {"inputs": [{"name": "amount", "type": "uint256"}], "name": "deposit", "outputs": [], "stateMutability": "nonpayable", "type": "function"},
-  {"inputs": [{"name": "user", "type": "address"}], "name": "getBalance", "outputs": [{"name": "", "type": "uint256"}], "stateMutability": "view", "type": "function"}
-]
+```python
+def sign_and_submit(resp_data, chain="bsc"):
+    """Sign all txs from a prepare endpoint, submit in one batch call."""
+    signed = [account.sign_transaction(t["transaction"]).raw_transaction.hex()
+              for t in resp_data["transactions"]]
+    return httpx.post(f"{API}/payment/submit-tx",
+        json={"signed_txs": signed, "chain": chain},
+        headers=auth_headers())
 ```
 
-**Direct payment (per call)**:
+**Prepaid deposit** (e.g. $1 = 100 calls):
 ```python
-from web3 import Web3
-
-w3 = Web3(Web3.HTTPProvider("https://bsc-dataseed.binance.org/"))
-PAYMENT_AMOUNT = 10**16  # 0.01 USDT
-
-# 1. Approve (one-time, approve more to avoid repeating)
-usdt.functions.approve(CONTRACT, PAYMENT_AMOUNT * 100).build_transaction(...)
-# 2. Pay
-contract.functions.pay().build_transaction(...)
-# 3. Use tx hash in X-Tx-Hash header
+resp = httpx.post(f"{API}/payment/prepare-deposit",
+    json={"amount_usdt": 1.0}, headers=auth_headers())
+sign_and_submit(resp.json()["data"])
 ```
 
-**Prepaid deposit**:
+**Direct payment** (per call, 0.01 USDT):
 ```python
-DEPOSIT_AMOUNT = 10**18  # 1 USDT = 100 calls
-
-# 1. Approve
-usdt.functions.approve(CONTRACT, DEPOSIT_AMOUNT).build_transaction(...)
-# 2. Deposit
-contract.functions.deposit(DEPOSIT_AMOUNT).build_transaction(...)
-# 3. Wait ~15s, then use X-Payment-Mode: prepaid
+resp = httpx.post(f"{API}/payment/prepare-pay", headers=auth_headers())
+result = sign_and_submit(resp.json()["data"])
+tx_hash = result.json()["data"]["tx_hashes"][-1]
+# Use tx_hash in X-Tx-Hash header for the next paid API call
 ```
 
 ---
@@ -190,20 +154,35 @@ contract.functions.deposit(DEPOSIT_AMOUNT).build_transaction(...)
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/health` | Health check |
-| GET | `/agent/capabilities` | Full API discovery (call this first!) |
+| GET | `/agent/capabilities` | Full API discovery |
 | GET | `/markets/tags` | Polymarket tag categories |
 | GET | `/trading/setup` | L2 credential derivation guide |
 | GET | `/trading/contracts` | Polygon contract addresses |
 | GET | `/deposit/supported-assets` | Supported deposit chains/tokens |
 | GET | `/payment/balance` | Check prepaid balance (auth required) |
 | POST | `/payment/verify` | Verify payment tx (auth required) |
+| POST | `/payment/prepare-deposit` | Build unsigned deposit tx(s) (auth required) |
+| POST | `/payment/prepare-pay` | Build unsigned pay tx(s) (auth required) |
+| POST | `/payment/submit-tx` | Broadcast signed tx(s) to BSC/Polygon — supports batch (auth required) |
+| POST | `/trading/prepare-deploy-safe` | Check Safe deployment, get CreateProxy typed data (auth required) |
+| POST | `/trading/prepare-enable` | Get SafeTx hash + CLOB typed data for trading setup (auth required) |
+| POST | `/trading/prepare-order` | Build EIP-712 order typed data for signing (auth required) |
 
 ### Paid (0.01 USDT/call)
+
+**Account Setup** (one-time, gasless on Polygon)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/trading/submit-deploy-safe` | Deploy Safe via relayer — gasless |
+| POST | `/trading/submit-approvals` | Submit token approvals via relayer — gasless |
+| POST | `/trading/submit-credentials` | Submit EIP-712 signature, get L2 credentials |
 
 **Deposits / Withdrawals**
 
 | Method | Path | Description |
 |--------|------|-------------|
+| POST | `/deposit/prepare-transfer` | Deposit USDT on BSC directly to Polymarket Safe (trading balance) |
 | POST | `/deposit/create` | Get deposit addresses (EVM/Solana/BTC) |
 | POST | `/deposit/withdraw` | Get withdrawal address for destination chain |
 
@@ -215,7 +194,6 @@ contract.functions.deposit(DEPOSIT_AMOUNT).build_transaction(...)
 | GET | `/markets/events/{event_id}` | Event details |
 | GET | `/markets/events/slug/{slug}` | Event by slug |
 | GET | `/markets/{market_id}` | Market details |
-| GET | `/football/markets` | Football markets (league, limit, offset) |
 
 **Orderbook / Prices**
 
@@ -230,7 +208,7 @@ contract.functions.deposit(DEPOSIT_AMOUNT).build_transaction(...)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/positions` | Your positions + P&L (needs X-Poly-Address) |
+| GET | `/positions` | Your positions + P&L |
 | GET | `/positions/trades` | Your trade history |
 | GET | `/positions/activity` | Your on-chain activity |
 
@@ -242,17 +220,95 @@ contract.functions.deposit(DEPOSIT_AMOUNT).build_transaction(...)
 | GET | `/traders/{address}/positions` | Another trader's positions |
 | GET | `/traders/{address}/trades` | Another trader's trades |
 
-**Trading** (requires Polymarket L2 headers)
+**Trading** (requires L2 credential headers)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/trading/order` | Place order (limit/market) |
+| POST | `/trading/submit-order` | Submit signed order to Polymarket CLOB |
 | DELETE | `/trading/order/{order_id}` | Cancel order |
 | DELETE | `/trading/orders` | Cancel all orders |
 | GET | `/trading/orders` | Open orders |
 
-Trading requires additional headers: `X-Poly-Api-Key`, `X-Poly-Secret`, `X-Poly-Passphrase`, `X-Poly-Address`.
-These are derived once locally — see `GET /trading/setup` for instructions.
+Trading endpoints require these additional headers: `X-Poly-Api-Key`, `X-Poly-Secret`, `X-Poly-Passphrase`.
+These are derived once via the Enable Trading flow below.
+
+### Enable Trading (one-time setup, fully gasless)
+
+Before placing orders, the agent must enable trading. All Polygon operations are gasless — the server handles everything via Polymarket's relayer.
+
+```python
+from eth_account.messages import encode_defunct
+from hexbytes import HexBytes
+
+# 1. Deploy Safe wallet (skip if already deployed)
+resp = httpx.post(f"{API}/trading/prepare-deploy-safe", headers=auth_headers())
+data = resp.json()["data"]
+if not data["already_deployed"]:
+    td = data["typed_data"]
+    sig = Account.sign_typed_data(
+        PRIVATE_KEY, td["domain"], td["types"], td["message"]
+    ).signature.hex()
+    httpx.post(f"{API}/trading/submit-deploy-safe",
+        json={"signature": f"0x{sig}"}, headers=auth_headers())
+
+# 2. Get approval status + CLOB typed data
+resp = httpx.post(f"{API}/trading/prepare-enable", headers=auth_headers())
+data = resp.json()["data"]
+
+# 3. Sign and submit approvals ONLY if needed (server checks on-chain)
+if data["approvals_needed"]:
+    approval_hash = data["approval_data"]["hash"]
+    approval_sig = account.sign_message(
+        encode_defunct(HexBytes(approval_hash))
+    ).signature.hex()
+    httpx.post(f"{API}/trading/submit-approvals",
+        json={"signature": f"0x{approval_sig}", "approval_data": data["approval_data"]},
+        headers=auth_headers())
+
+# 4. Sign CLOB typed data and derive L2 credentials
+clob_td = data["clob_typed_data"]
+clob_sig = Account.sign_typed_data(
+    PRIVATE_KEY, clob_td["domain"], clob_td["types"], clob_td["message"]
+).signature.hex()
+resp = httpx.post(f"{API}/trading/submit-credentials",
+    json={"signature": f"0x{clob_sig}", "timestamp": clob_td["message"]["timestamp"]},
+    headers=auth_headers())
+creds = resp.json()["data"]
+# Store creds["api_key"], creds["secret"], creds["passphrase"] — they don't expire
+```
+
+After this, include L2 credentials as headers in all trading requests:
+```
+X-Poly-Api-Key: <api_key>
+X-Poly-Secret: <secret>
+X-Poly-Passphrase: <passphrase>
+```
+
+### Placing Orders (prepare → sign → submit)
+
+```python
+# 1. Server builds the order (fetches tick size, fees, etc.)
+resp = httpx.post(f"{API}/trading/prepare-order",
+    json={"token_id": "...", "side": "BUY", "size": 5.0, "price": 0.65},
+    headers=auth_headers())
+data = resp.json()["data"]
+# summary tells you: "Order ready: BUY 5.0 shares of "Yes" on "Will X happen?" @ $0.65 ($3.25 total)"
+
+# 2. Sign the EIP-712 typed data
+td = data["typed_data"]
+sig = Account.sign_typed_data(
+    PRIVATE_KEY, td["domain"], td["types"], td["message"]
+).signature.hex()
+
+# 3. Submit — server handles CLOB auth and submission
+trade_headers = {**auth_headers(), "X-Poly-Api-Key": api_key, "X-Poly-Secret": secret, "X-Poly-Passphrase": passphrase}
+resp = httpx.post(f"{API}/trading/submit-order",
+    json={"signature": f"0x{sig}", "clob_order": data["clob_order"], "order_type": "GTC"},
+    headers=trade_headers)
+# summary tells you: "Order filled: bought 5 shares for $3.25 USDC."
+```
+
+Order types: `GTC` (limit), `FOK` (fill-or-kill / market), `FAK` (fill-and-kill), `GTD` (good-till-date).
 
 ---
 
@@ -260,36 +316,22 @@ These are derived once locally — see `GET /trading/setup` for instructions.
 
 ```python
 """
-Complete example: wallet setup → agentCrab payment → Polymarket deposit → search markets
-Dependencies: pip install web3 httpx eth-account
+Complete example: wallet setup → payment → deposit → enable trading → trade
+Dependencies: pip install httpx eth-account
 """
 import time, httpx
-from web3 import Web3
 from eth_account import Account
 from eth_account.messages import encode_defunct
+from hexbytes import HexBytes
 
 API = "http://localhost:8000"
-BSC_RPC = "https://bsc-dataseed.binance.org/"
-CONTRACT = "0x497579f445eA3707D0fE84C6bd2408620D384a4C"
-USDT = "0x55d398326f99059fF775485246999027B3197955"
 
 # ── Step 1: Use existing key or create wallet ──
 PRIVATE_KEY = "0xUSER_PRIVATE_KEY"  # from user input
 account = Account.from_key(PRIVATE_KEY)
-w3 = Web3(Web3.HTTPProvider(BSC_RPC))
 
-# ── Step 2: Prepaid deposit to agentCrab (1 USDT = 100 API calls) ──
-USDT_ABI = [{"inputs":[{"name":"spender","type":"address"},{"name":"amount","type":"uint256"}],"name":"approve","outputs":[{"name":"","type":"bool"}],"stateMutability":"nonpayable","type":"function"}]
-PAY_ABI = [{"inputs":[{"name":"amount","type":"uint256"}],"name":"deposit","outputs":[],"stateMutability":"nonpayable","type":"function"}]
-
-usdt_contract = w3.eth.contract(address=Web3.to_checksum_address(USDT), abi=USDT_ABI)
-pay_contract = w3.eth.contract(address=Web3.to_checksum_address(CONTRACT), abi=PAY_ABI)
-
-deposit_amount = 10**18  # 1 USDT
-# approve + deposit (sign and send both transactions)
-
-# ── Step 3: Build auth headers (reuse for all API calls) ──
-def auth_headers():
+# ── Helpers ──
+def auth_headers(payment_mode="prepaid"):
     ts = int(time.time())
     msg = f"agentcrab:{ts}"
     sig = account.sign_message(encode_defunct(text=msg)).signature.hex()
@@ -297,19 +339,76 @@ def auth_headers():
         "X-Wallet-Address": account.address,
         "X-Signature": f"0x{sig}",
         "X-Message": msg,
-        "X-Payment-Mode": "prepaid",
+        "X-Payment-Mode": payment_mode,
     }
 
-# ── Step 4: Deposit to Polymarket ──
-resp = httpx.post(f"{API}/deposit/create",
-    json={"polymarket_address": account.address},
-    headers=auth_headers())
-evm_deposit_addr = resp.json()["data"]["deposit_addresses"]["evm"]
-# Send USDT to evm_deposit_addr (standard ERC-20 transfer)
+def sign_and_submit(data, chain="bsc"):
+    """Sign all txs locally, submit in one batch call."""
+    signed = [account.sign_transaction(t["transaction"]).raw_transaction.hex()
+              for t in data["transactions"]]
+    return httpx.post(f"{API}/payment/submit-tx",
+        json={"signed_txs": signed, "chain": chain},
+        headers=auth_headers())
 
-# ── Step 5: Search markets ──
-resp = httpx.get(f"{API}/markets/search?query=premier+league&limit=5",
+# ── Step 2: Prepaid deposit to agentCrab (1 USDT = 100 API calls) ──
+resp = httpx.post(f"{API}/payment/prepare-deposit",
+    json={"amount_usdt": 1.0}, headers=auth_headers())
+sign_and_submit(resp.json()["data"])
+
+# ── Step 3: Deposit to Polymarket (direct to Safe via BSC contract) ──
+resp = httpx.post(f"{API}/deposit/prepare-transfer",
+    json={"amount_usdt": 10.0}, headers=auth_headers())
+sign_and_submit(resp.json()["data"])
+
+# ── Step 4: Deploy Safe wallet (gasless, one-time) ──
+resp = httpx.post(f"{API}/trading/prepare-deploy-safe", headers=auth_headers())
+data = resp.json()["data"]
+if not data["already_deployed"]:
+    td = data["typed_data"]
+    sig = Account.sign_typed_data(PRIVATE_KEY, td["domain"], td["types"], td["message"]).signature.hex()
+    httpx.post(f"{API}/trading/submit-deploy-safe",
+        json={"signature": f"0x{sig}"}, headers=auth_headers())
+
+# ── Step 5: Enable trading (gasless, one-time) ──
+resp = httpx.post(f"{API}/trading/prepare-enable", headers=auth_headers())
+data = resp.json()["data"]
+
+# Sign approval hash (personal_sign) → submit to relayer (skip if already approved)
+if data["approvals_needed"]:
+    ah = data["approval_data"]["hash"]
+    asig = account.sign_message(encode_defunct(HexBytes(ah))).signature.hex()
+    httpx.post(f"{API}/trading/submit-approvals",
+        json={"signature": f"0x{asig}", "approval_data": data["approval_data"]},
+        headers=auth_headers())
+
+# Sign CLOB typed data → derive L2 credentials
+ct = data["clob_typed_data"]
+csig = Account.sign_typed_data(PRIVATE_KEY, ct["domain"], ct["types"], ct["message"]).signature.hex()
+resp = httpx.post(f"{API}/trading/submit-credentials",
+    json={"signature": f"0x{csig}", "timestamp": ct["message"]["timestamp"]},
     headers=auth_headers())
+creds = resp.json()["data"]
+poly_headers = {
+    "X-Poly-Api-Key": creds["api_key"],
+    "X-Poly-Secret": creds["secret"],
+    "X-Poly-Passphrase": creds["passphrase"],
+}
+
+# ── Step 6: Search markets and trade ──
+resp = httpx.get(f"{API}/markets/search?query=bitcoin&limit=5",
+    headers=auth_headers())
+print(resp.json()["summary"])
+
+# Place order (prepare → sign → submit)
+resp = httpx.post(f"{API}/trading/prepare-order",
+    json={"token_id": "...", "side": "BUY", "size": 5, "price": 0.65},
+    headers=auth_headers())
+order_data = resp.json()["data"]
+td = order_data["typed_data"]
+sig = Account.sign_typed_data(PRIVATE_KEY, td["domain"], td["types"], td["message"]).signature.hex()
+resp = httpx.post(f"{API}/trading/submit-order",
+    json={"signature": f"0x{sig}", "clob_order": order_data["clob_order"], "order_type": "GTC"},
+    headers={**auth_headers(), **poly_headers})
 print(resp.json()["summary"])
 ```
 
@@ -318,8 +417,7 @@ print(resp.json()["summary"])
 ## Deployment (Self-Hosted)
 
 ```bash
-git clone https://github.com/happycryptochillguy-star/agentCrab.git
-cd agentWay/Polymarket
+cd Polymarket
 pip install -r api/requirements.txt
 uvicorn api.main:app --host 0.0.0.0 --port 8000
 ```

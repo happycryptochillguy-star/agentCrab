@@ -60,7 +60,25 @@ class VerifyResponse(BaseModel):
     message: str
 
 
+class PrepareDepositRequest(BaseModel):
+    amount_usdt: float  # Amount in USDT (e.g. 1.0 = 100 calls)
+
+
+class PreparePayRequest(BaseModel):
+    pass  # No params needed, always 0.01 USDT
+
+
+class SubmitTxRequest(BaseModel):
+    signed_tx: str | None = None  # Single tx (hex, 0x-prefixed)
+    signed_txs: list[str] | None = None  # Batch: broadcast in order
+    chain: str = "bsc"  # "bsc" or "polygon"
+
+
 # === Deposit Models ===
+
+class PreparePolymarketDepositRequest(BaseModel):
+    amount_usdt: float  # Amount to deposit to Polymarket
+
 
 class DepositCreateRequest(BaseModel):
     polymarket_address: str  # User's Polymarket wallet address on Polygon
@@ -181,6 +199,29 @@ class Activity(BaseModel):
 
 
 # === Trading Models ===
+
+class SubmitDeploySafeRequest(BaseModel):
+    signature: str  # EIP-712 CreateProxy signature (0x-prefixed hex)
+
+
+class SubmitApprovalsRequest(BaseModel):
+    signature: str  # personal_sign of SafeTx hash (0x-prefixed hex)
+    approval_data: dict  # The approval_data object from prepare-enable
+
+
+class PrepareOrderRequest(BaseModel):
+    token_id: str
+    side: str  # BUY or SELL
+    size: float
+    price: float
+    order_type: str = "GTC"  # GTC, GTD, FOK, FAK
+
+
+class SubmitOrderRequest(BaseModel):
+    signature: str  # EIP-712 Order signature (0x-prefixed hex)
+    clob_order: dict  # The clob_order object from prepare-order
+    order_type: str = "GTC"  # GTC, GTD, FOK, FAK
+
 
 class OrderRequest(BaseModel):
     token_id: str
