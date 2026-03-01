@@ -40,17 +40,21 @@ async def create_deposit(
             ).model_dump(),
         )
 
-    evm_addr = result.deposit_addresses.evm
+    addrs = result.deposit_addresses
+    evm_addr = addrs.evm
     summary = (
         f"Deposit address created for {req.polymarket_address[:10]}... "
         f"Send supported tokens (USDT, USDC, etc.) to EVM address {evm_addr}. "
         f"Polymarket will automatically bridge to USDC.e on your Polygon account."
     )
 
-    return SuccessResponse(
-        summary=summary,
-        data=result.model_dump(),
-    )
+    data: dict = {"evm_address": evm_addr}
+    if addrs.svm:
+        data["solana_address"] = addrs.svm
+    if addrs.btc:
+        data["bitcoin_address"] = addrs.btc
+
+    return SuccessResponse(summary=summary, data=data)
 
 
 @router.post("/withdraw")
@@ -87,7 +91,7 @@ async def create_withdraw(
 
     return SuccessResponse(
         summary=summary,
-        data=result.model_dump(),
+        data={"send_to_address": evm_addr},
     )
 
 
@@ -193,12 +197,8 @@ async def prepare_transfer(
         ),
         data={
             "amount_usdt": req.amount_usdt,
-            "safe_address": safe_address,
-            "quote_id": quote["quoteId"],
-            "est_total_usdt": est_total,
             "est_output_usdc": est_output,
             "est_fees_usd": est_fees,
-            "chain": "bsc",
             "transactions": transactions,
         },
     )

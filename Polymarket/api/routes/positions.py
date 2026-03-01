@@ -10,6 +10,38 @@ from api.services.payment import derive_safe_address
 router = APIRouter(prefix="/positions", tags=["positions"])
 
 
+def _simplify_position(p) -> dict:
+    """Strip noise from position, keep trading-relevant fields."""
+    d: dict = {
+        "question": p.question,
+        "outcome": p.outcome,
+        "size": p.size,
+    }
+    if p.avg_price:
+        d["avg_price"] = p.avg_price
+    if p.current_price:
+        d["current_price"] = p.current_price
+    if p.pnl:
+        d["pnl"] = p.pnl
+    if p.pnl_percent:
+        d["pnl_percent"] = p.pnl_percent
+    d["token_id"] = p.token_id
+    return d
+
+
+def _simplify_trade(t) -> dict:
+    """Strip noise from trade."""
+    d: dict = {
+        "side": t.side,
+        "outcome": t.outcome,
+        "size": t.size,
+        "price": t.price,
+    }
+    if t.timestamp:
+        d["timestamp"] = t.timestamp
+    return d
+
+
 @router.get("")
 async def get_positions(
     wallet_address: str = Depends(verify_auth_and_payment),
@@ -44,7 +76,7 @@ async def get_positions(
 
     return SuccessResponse(
         summary=summary,
-        data=[p.model_dump() for p in positions],
+        data=[_simplify_position(p) for p in positions],
     )
 
 
@@ -75,7 +107,7 @@ async def get_trades(
 
     return SuccessResponse(
         summary=summary,
-        data=[t.model_dump() for t in trades],
+        data=[_simplify_trade(t) for t in trades],
     )
 
 
@@ -106,5 +138,9 @@ async def get_activity(
 
     return SuccessResponse(
         summary=summary,
-        data=[a.model_dump() for a in activities],
+        data=[{
+            "type": a.type,
+            "amount": a.amount,
+            "timestamp": a.timestamp,
+        } for a in activities],
     )

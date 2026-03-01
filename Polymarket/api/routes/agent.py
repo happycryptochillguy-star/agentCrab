@@ -50,57 +50,12 @@ async def get_capabilities():
             },
             "payment": {
                 "chain": "BSC (Chain ID: 56)",
-                "contract_address": settings.contract_address or "not configured",
-                "usdt_address": settings.usdt_address,
-                "cost_per_call": "0.01 USDT (10^16 wei, 18 decimals)",
+                "cost_per_call": "0.01 USDT",
                 "modes": {
-                    "direct": {
-                        "description": "Pay per call. Call pay() on contract, pass tx hash in header.",
-                        "steps": [
-                            "USDT.approve(CONTRACT_ADDRESS, amount)",
-                            "AgentCrabPayment.pay()",
-                            "Use the tx hash in X-Tx-Hash header",
-                        ],
-                    },
-                    "prepaid": {
-                        "description": "Deposit once, use many times. Background scanner detects deposits every ~15s.",
-                        "steps": [
-                            "USDT.approve(CONTRACT_ADDRESS, amount)",
-                            "AgentCrabPayment.deposit(amount)",
-                            "Wait ~15s for scanner, then call API with X-Payment-Mode: prepaid",
-                        ],
-                    },
+                    "prepaid": "POST /payment/prepare-deposit → sign → POST /payment/submit-tx. Balance usable immediately.",
+                    "direct": "POST /payment/prepare-pay → sign → POST /payment/submit-tx. Pass tx hash in X-Tx-Hash header.",
                 },
-                "contract_abi": [
-                    {
-                        "inputs": [],
-                        "name": "pay",
-                        "outputs": [],
-                        "stateMutability": "nonpayable",
-                        "type": "function",
-                    },
-                    {
-                        "inputs": [{"name": "amount", "type": "uint256"}],
-                        "name": "deposit",
-                        "outputs": [],
-                        "stateMutability": "nonpayable",
-                        "type": "function",
-                    },
-                    {
-                        "inputs": [{"name": "user", "type": "address"}],
-                        "name": "getBalance",
-                        "outputs": [{"name": "", "type": "uint256"}],
-                        "stateMutability": "view",
-                        "type": "function",
-                    },
-                    {
-                        "inputs": [{"name": "user", "type": "address"}],
-                        "name": "getDirectPaymentCount",
-                        "outputs": [{"name": "", "type": "uint256"}],
-                        "stateMutability": "view",
-                        "type": "function",
-                    },
-                ],
+                "note": "All transactions are built server-side. Agent only signs and submits. No ABI or contract interaction needed.",
             },
             "endpoints": {
                 "free": [
@@ -429,37 +384,12 @@ async def get_capabilities():
                 "window_seconds": 60,
                 "scope": "per IP address",
             },
-            "workflow_reference": {
-                "note": "These describe how each flow works. Only execute when the user requests it.",
-                "agentcrab_payment": [
-                    "POST /payment/prepare-deposit — server builds unsigned BSC transactions",
-                    "Agent signs each transaction locally with eth_account.sign_transaction()",
-                    "POST /payment/submit-tx — server broadcasts to BSC",
-                    "Balance available immediately for API calls",
-                ],
-                "deposit": [
-                    "POST /deposit/prepare-transfer — server builds unsigned BSC depositErc20 transaction",
-                    "Agent signs the transaction locally",
-                    "POST /payment/submit-tx — server broadcasts to BSC",
-                    "Polymarket automatically bridges funds to USDC.e on Polygon",
-                ],
-                "withdraw": [
-                    "POST /deposit/withdraw — get withdrawal address for destination chain",
-                    "Agent sends USDC.e on Polygon to the returned address",
-                    "Polymarket bridges funds to destination chain/token",
-                ],
-                "deploy_safe": [
-                    "POST /trading/prepare-deploy-safe — check if Safe exists, get CreateProxy typed data",
-                    "Agent signs with sign_typed_data()",
-                    "POST /trading/submit-deploy-safe — server deploys Safe via Polymarket relayer (gasless)",
-                ],
-                "enable_trading": [
-                    "POST /trading/prepare-enable — returns SafeTx hash + CLOB typed data",
-                    "Agent personal_signs the SafeTx hash (for gasless approvals)",
-                    "POST /trading/submit-approvals — server submits to Polymarket relayer (gasless)",
-                    "Agent signs CLOB typed data with sign_typed_data()",
-                    "POST /trading/submit-credentials — server derives L2 API credentials",
-                ],
+            "workflows": {
+                "note": "All follow prepare→sign→submit pattern. Only execute when user requests.",
+                "payment": "prepare-deposit → sign → submit-tx",
+                "deposit_to_polymarket": "prepare-transfer → sign → submit-tx",
+                "enable_trading": "prepare-deploy-safe → sign → submit-deploy-safe → prepare-enable → sign → submit-approvals + submit-credentials",
+                "place_order": "prepare-order → sign → submit-order",
             },
         },
     }

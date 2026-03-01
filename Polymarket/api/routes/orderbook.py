@@ -3,10 +3,26 @@
 from fastapi import APIRouter, Depends, Body, HTTPException
 
 from api.auth import verify_auth_and_payment
-from api.models import SuccessResponse, ErrorResponse
+from api.models import SuccessResponse, ErrorResponse, Orderbook
 from api.services import clob as clob_svc
 
 router = APIRouter(tags=["orderbook"])
+
+MAX_LEVELS = 10  # Top N bid/ask levels to return
+
+
+def _simplify_orderbook(book: Orderbook) -> dict:
+    """Trim orderbook to top N levels and add counts."""
+    return {
+        "token_id": book.token_id,
+        "best_bid": book.best_bid,
+        "best_ask": book.best_ask,
+        "spread": book.spread,
+        "bids": [{"price": b.price, "size": b.size} for b in book.bids[:MAX_LEVELS]],
+        "asks": [{"price": a.price, "size": a.size} for a in book.asks[:MAX_LEVELS]],
+        "total_bids": len(book.bids),
+        "total_asks": len(book.asks),
+    }
 
 
 @router.get("/orderbook/{token_id}")
@@ -36,7 +52,7 @@ async def get_orderbook(
         f"{spread_str}."
     )
 
-    return SuccessResponse(summary=summary, data=book.model_dump())
+    return SuccessResponse(summary=summary, data=_simplify_orderbook(book))
 
 
 @router.post("/orderbook/batch")
@@ -68,7 +84,7 @@ async def get_orderbooks_batch(
     summary = f"Fetched orderbooks for {len(books)} token{'s' if len(books) != 1 else ''}."
     return SuccessResponse(
         summary=summary,
-        data=[b.model_dump() for b in books],
+        data=[_simplify_orderbook(b) for b in books],
     )
 
 
@@ -96,7 +112,14 @@ async def get_price(
         f"mid {mid}."
     )
 
-    return SuccessResponse(summary=summary, data=price.model_dump())
+    return SuccessResponse(summary=summary, data={
+        "token_id": price.token_id,
+        "best_bid": price.best_bid,
+        "best_ask": price.best_ask,
+        "midpoint": price.midpoint,
+        "spread": price.spread,
+        "last_trade_price": price.last_trade_price,
+    })
 
 
 @router.post("/prices/batch")
@@ -128,5 +151,12 @@ async def get_prices_batch(
     summary = f"Fetched prices for {len(prices)} token{'s' if len(prices) != 1 else ''}."
     return SuccessResponse(
         summary=summary,
-        data=[p.model_dump() for p in prices],
+        data=[{
+            "token_id": p.token_id,
+            "best_bid": p.best_bid,
+            "best_ask": p.best_ask,
+            "midpoint": p.midpoint,
+            "spread": p.spread,
+            "last_trade_price": p.last_trade_price,
+        } for p in prices],
     )

@@ -30,66 +30,20 @@ async def get_setup_guide():
     Free, no auth required.
     """
     return SuccessResponse(
-        summary="Polymarket trading setup guide. Follow these steps to derive your L2 credentials for trading.",
+        summary="Polymarket trading setup guide. All steps are handled by our API — no SDK or direct contract calls needed.",
         data={
             "overview": (
                 "To trade on Polymarket, you need L2 credentials (API key, secret, passphrase). "
-                "These are derived from your Polygon wallet's private key using EIP-712 signatures. "
-                "You only need to do this ONCE — then use the credentials for all trading API calls."
+                "These are derived via our API using EIP-712 signatures. "
+                "You only need to do this ONCE — then use the credentials for all trading calls."
             ),
             "steps": [
-                {
-                    "step": 1,
-                    "title": "Ensure you have a Polygon wallet",
-                    "description": (
-                        "Your Polymarket wallet is on Polygon (chain ID 137). "
-                        "If you deposited via our /deposit/create endpoint, your funds are already on Polygon."
-                    ),
-                },
-                {
-                    "step": 2,
-                    "title": "Approve tokens on Polymarket contracts",
-                    "description": (
-                        "Approve USDC.e and CTF tokens on the exchange contracts. "
-                        "See /trading/contracts for the exact addresses."
-                    ),
-                },
-                {
-                    "step": 3,
-                    "title": "Derive L2 API credentials",
-                    "description": (
-                        "Use the py-clob-client Python SDK to derive credentials:\n\n"
-                        "```python\n"
-                        "from py_clob_client.client import ClobClient\n"
-                        "client = ClobClient(\n"
-                        '    "https://clob.polymarket.com",\n'
-                        '    key="YOUR_POLYGON_PRIVATE_KEY",\n'
-                        "    chain_id=137,\n"
-                        "    signature_type=0,  # 0 = EOA\n"
-                        ")\n"
-                        "creds = client.create_or_derive_api_creds()\n"
-                        "print(creds)  # {apiKey, secret, passphrase}\n"
-                        "```\n\n"
-                        "Or use the CLOB API directly:\n"
-                        "GET https://clob.polymarket.com/auth/derive-api-key\n"
-                        "(requires L1 EIP-712 signature headers)"
-                    ),
-                },
-                {
-                    "step": 4,
-                    "title": "Pass credentials in trading API calls",
-                    "description": (
-                        "Include these headers in all trading requests:\n"
-                        "- X-Poly-Api-Key: your API key\n"
-                        "- X-Poly-Secret: your secret\n"
-                        "- X-Poly-Passphrase: your passphrase\n\n"
-                        "These credentials don't expire. Store them securely. "
-                        "Server derives your Polygon address automatically."
-                    ),
-                },
+                "1. POST /trading/prepare-deploy-safe → sign typed data → POST /trading/submit-deploy-safe",
+                "2. POST /trading/prepare-enable → personal_sign SafeTx hash → POST /trading/submit-approvals",
+                "3. Sign clob_typed_data → POST /trading/submit-credentials → get L2 creds",
+                "4. Use X-Poly-Api-Key, X-Poly-Secret, X-Poly-Passphrase headers for all trading calls",
             ],
-            "sdk_install": "pip install py-clob-client",
-            "sdk_repo": "https://github.com/Polymarket/py-clob-client",
+            "note": "All Polygon operations are gasless. No SDK install needed.",
         },
     )
 
@@ -100,63 +54,11 @@ async def get_contracts():
     Free, no auth required.
     """
     return SuccessResponse(
-        summary="Polymarket Polygon contract addresses. Approve USDC.e and CTF on the exchange contracts before trading.",
+        summary="Polymarket contracts on Polygon. All approvals are handled gaslessly by POST /trading/submit-approvals.",
         data={
             "chain": "Polygon (Chain ID: 137)",
-            "settlement_token": {
-                "name": "USDC.e",
-                "address": settings.polygon_usdc_address,
-                "decimals": 6,
-            },
-            "contracts": {
-                "ctf": {
-                    "name": "Conditional Tokens Framework",
-                    "address": "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045",
-                },
-                "ctf_exchange": {
-                    "name": "CTF Exchange",
-                    "address": "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E",
-                },
-                "neg_risk_ctf_exchange": {
-                    "name": "Neg Risk CTF Exchange",
-                    "address": "0xC5d563A36AE78145C45a50134d48A1215220f80a",
-                },
-                "neg_risk_adapter": {
-                    "name": "Neg Risk Adapter",
-                    "address": "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296",
-                },
-            },
-            "approvals_needed": [
-                {
-                    "description": "Approve USDC.e on CTF Exchange",
-                    "token": settings.polygon_usdc_address,
-                    "spender": "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E",
-                },
-                {
-                    "description": "Approve USDC.e on Neg Risk CTF Exchange",
-                    "token": settings.polygon_usdc_address,
-                    "spender": "0xC5d563A36AE78145C45a50134d48A1215220f80a",
-                },
-                {
-                    "description": "Approve CTF on CTF Exchange (setApprovalForAll)",
-                    "token": "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045",
-                    "spender": "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E",
-                },
-                {
-                    "description": "Approve CTF on Neg Risk CTF Exchange (setApprovalForAll)",
-                    "token": "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045",
-                    "spender": "0xC5d563A36AE78145C45a50134d48A1215220f80a",
-                },
-                {
-                    "description": "Approve CTF on Neg Risk Adapter (setApprovalForAll)",
-                    "token": "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045",
-                    "spender": "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296",
-                },
-            ],
-            "approval_abi": [
-                "function approve(address spender, uint256 amount) returns (bool)",
-                "function setApprovalForAll(address operator, bool approved)",
-            ],
+            "settlement_token": "USDC.e (6 decimals)",
+            "note": "You do NOT need to interact with these contracts directly. Use /trading/prepare-enable → /trading/submit-approvals for gasless setup.",
         },
     )
 
@@ -370,12 +272,19 @@ async def prepare_enable(
             f"and submit to /trading/submit-credentials."
         )
 
+    # Strip verbose approval_status — agent only needs to know what's missing
+    simplified_approval = {
+        "all_approved": approval_status["all_approved"],
+    }
+    if approval_status.get("missing"):
+        simplified_approval["missing_count"] = len(approval_status["missing"])
+
     return SuccessResponse(
         summary=summary,
         data={
             "safe_address": safe_address,
             "approvals_needed": not approval_status["all_approved"],
-            "approval_status": approval_status,
+            "approval_status": simplified_approval,
             "approval_data": approval_data,
             "clob_typed_data": clob_typed_data,
         },
@@ -448,11 +357,6 @@ async def submit_credentials(
             "api_key": creds.get("apiKey"),
             "secret": creds.get("secret"),
             "passphrase": creds.get("passphrase"),
-            "usage": {
-                "X-Poly-Api-Key": creds.get("apiKey"),
-                "X-Poly-Secret": creds.get("secret"),
-                "X-Poly-Passphrase": creds.get("passphrase"),
-            },
         },
     )
 
@@ -511,7 +415,19 @@ async def prepare_order(
         f"Sign typed_data and submit to POST /trading/submit-order."
     )
 
-    return SuccessResponse(summary=summary, data=result)
+    # Strip internal fields agent doesn't need
+    simplified = {
+        "typed_data": result["typed_data"],
+        "clob_order": result["clob_order"],
+        "side": result["side"],
+        "price": result["price"],
+        "size": result["size"],
+        "cost_usdc": result["cost_usdc"],
+    }
+    if market:
+        simplified["market"] = market
+
+    return SuccessResponse(summary=summary, data=simplified)
 
 
 @router.post("/submit-order")
@@ -574,10 +490,21 @@ async def submit_order(
     else:
         summary = f"Order submitted ({status}). ID: {order_id[:16]}..."
 
-    # Include tx hash for on-chain verification
-    data = dict(result)
+    # Simplified response — only what the agent/user needs
+    data: dict = {
+        "order_id": order_id,
+        "status": status,
+        "success": success,
+    }
+    if result.get("takingAmount"):
+        data["taking_amount"] = result["takingAmount"]
+    if result.get("makingAmount"):
+        data["making_amount"] = result["makingAmount"]
     if tx_hashes:
+        data["tx_hash"] = tx_hashes[0]
         data["polygonscan_url"] = f"https://polygonscan.com/tx/{tx_hashes[0]}"
+    if not success and result.get("errorMsg"):
+        data["error"] = result["errorMsg"]
 
     return SuccessResponse(summary=summary, data=data)
 
@@ -669,4 +596,21 @@ async def get_open_orders(
     else:
         summary = f"{total} open order{'s' if total != 1 else ''} on Polymarket."
 
-    return SuccessResponse(summary=summary, data=orders)
+    # Simplify CLOB order objects
+    simplified = []
+    for o in orders:
+        entry: dict = {
+            "order_id": o.get("id", ""),
+            "side": o.get("side", ""),
+            "price": o.get("price", ""),
+            "original_size": o.get("original_size", ""),
+            "size_matched": o.get("size_matched", ""),
+            "status": o.get("status", ""),
+        }
+        if o.get("asset_id"):
+            entry["token_id"] = o["asset_id"]
+        if o.get("created_at"):
+            entry["created_at"] = o["created_at"]
+        simplified.append(entry)
+
+    return SuccessResponse(summary=summary, data=simplified)

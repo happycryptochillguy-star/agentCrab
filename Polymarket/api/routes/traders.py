@@ -9,6 +9,47 @@ from api.services import leaderboard as lb_svc
 router = APIRouter(prefix="/traders", tags=["traders"])
 
 
+def _simplify_leaderboard_entry(e) -> dict:
+    d: dict = {"rank": e.rank}
+    d["name"] = e.display_name or e.address[:10] + "..."
+    if e.volume:
+        d["volume"] = e.volume
+    if e.pnl:
+        d["pnl"] = e.pnl
+    if e.positions_count:
+        d["positions"] = e.positions_count
+    d["address"] = e.address
+    return d
+
+
+def _simplify_position(p) -> dict:
+    d: dict = {
+        "question": p.question,
+        "outcome": p.outcome,
+        "size": p.size,
+    }
+    if p.avg_price:
+        d["avg_price"] = p.avg_price
+    if p.current_price:
+        d["current_price"] = p.current_price
+    if p.pnl:
+        d["pnl"] = p.pnl
+    d["token_id"] = p.token_id
+    return d
+
+
+def _simplify_trade(t) -> dict:
+    d: dict = {
+        "side": t.side,
+        "outcome": t.outcome,
+        "size": t.size,
+        "price": t.price,
+    }
+    if t.timestamp:
+        d["timestamp"] = t.timestamp
+    return d
+
+
 @router.get("/leaderboard")
 async def get_leaderboard(
     limit: int = Query(20, ge=1, le=100),
@@ -37,7 +78,7 @@ async def get_leaderboard(
 
     return SuccessResponse(
         summary=summary,
-        data=[e.model_dump() for e in entries],
+        data=[_simplify_leaderboard_entry(e) for e in entries],
     )
 
 
@@ -66,7 +107,7 @@ async def get_trader_positions(
 
     return SuccessResponse(
         summary=summary,
-        data=[p.model_dump() for p in positions],
+        data=[_simplify_position(p) for p in positions],
     )
 
 
@@ -97,5 +138,5 @@ async def get_trader_trades(
 
     return SuccessResponse(
         summary=summary,
-        data=[t.model_dump() for t in trades],
+        data=[_simplify_trade(t) for t in trades],
     )

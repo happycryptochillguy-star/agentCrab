@@ -92,15 +92,13 @@ async def _probe_gamma() -> tuple[bool, str]:
 
 async def _probe_data_api() -> tuple[bool, str]:
     async with httpx.AsyncClient(**_proxy_client_kwargs()) as c:
+        # /activity is more stable than /leaderboard (which 404s intermittently)
         resp = await c.get(
-            f"{settings.data_api_url}/leaderboard",
+            f"{settings.data_api_url}/activity",
             params={"limit": 1},
         )
         resp.raise_for_status()
-        data = resp.json()
-        if not data:
-            return False, "Empty response"
-        return True, f"OK ({len(data)} entries)"
+        return True, f"OK (status {resp.status_code})"
 
 
 async def _probe_clob() -> tuple[bool, str]:

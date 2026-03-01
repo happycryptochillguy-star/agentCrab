@@ -5,12 +5,123 @@ import asyncio
 from fastapi import APIRouter, Depends, Query, HTTPException
 
 from api.auth import verify_auth_and_payment, verify_auth_only
-from api.models import SuccessResponse, ErrorResponse
+from api.models import SuccessResponse, ErrorResponse, GammaEvent, GammaMarketDetail
 from api.services import gamma as gamma_svc
 from api.services import history as history_svc
 from api.services.categories import build_category_tree, get_tag_slugs, resolve_category
 
 router = APIRouter(prefix="/markets", tags=["markets"])
+
+
+def _simplify_event(ev: GammaEvent) -> dict:
+    """Simplify a GammaEvent to agent-friendly format.
+
+    For multi-candidate events (30 binary Yes/No markets), flatten to a single
+    candidates list sorted by probability. This cuts 55KB → ~2KB.
+    """
+    vol_str = f"${ev.volume:,.0f}" if ev.volume else None
+
+    # Detect multi-candidate events: many markets, each with exactly 2 outcomes (Yes/No)
+    is_multi_candidate = (
+        len(ev.markets) >= 5
+        and all(
+            len(m.outcomes) == 2
+            and {o.outcome.lower() for o in m.outcomes} == {"yes", "no"}
+            for m in ev.markets
+        )
+    )
+
+    if is_multi_candidate:
+        # Flatten: extract candidate name from question + "Yes" probability/token_id
+        candidates = []
+        for m in ev.markets:
+            yes_out = next((o for o in m.outcomes if o.outcome.lower() == "yes"), None)
+            if not yes_out:
+                continue
+            # Extract candidate/subject from question
+            # Patterns: "Will X win..?", "Will X be..?", "Trump nominate X as..?"
+            name = m.question.rstrip("?").strip()
+            # Remove leading "Will "
+            if name.lower().startswith("will "):
+                name = name[5:]
+            # Cut at common verb phrases
+            for cut in [" win ", " be the ", " be ", " become ", " as the ", " as ", " before "]:
+                idx = name.lower().find(cut)
+                if idx > 0:
+                    name = name[:idx]
+                    break
+            candidates.append({
+                "name": name,
+                "chance": f"{yes_out.price:.1%}" if yes_out.price is not None else None,
+                "token_id": yes_out.token_id,
+                "_sort": yes_out.price or 0,
+            })
+        # Sort by probability descending, keep top 15
+        candidates.sort(key=lambda c: c["_sort"], reverse=True)
+        total_candidates = len(candidates)
+        candidates = candidates[:15]
+        for c in candidates:
+            del c["_sort"]
+
+        result: dict = {
+            "total_candidates": total_candidates,
+            "event_id": ev.event_id,
+            "title": ev.title,
+            "volume": vol_str,
+            "candidates": candidates,
+        }
+        if ev.end_date:
+            result["end_date"] = ev.end_date
+        return result
+
+    # Standard event: list markets with outcomes
+    markets = []
+    for m in ev.markets:
+        outcomes = []
+        for o in m.outcomes:
+            entry: dict = {"name": o.outcome}
+            if o.price is not None:
+                entry["chance"] = f"{o.price:.1%}"
+            if o.token_id:
+                entry["token_id"] = o.token_id
+            outcomes.append(entry)
+        markets.append({
+            "question": m.question,
+            "outcomes": outcomes,
+        })
+    result = {
+        "event_id": ev.event_id,
+        "title": ev.title,
+        "volume": vol_str,
+        "markets": markets,
+    }
+    if ev.end_date:
+        result["end_date"] = ev.end_date
+    return result
+
+
+def _simplify_market_detail(mkt: GammaMarketDetail) -> dict:
+    """Simplify a GammaMarketDetail for agent consumption."""
+    outcomes = []
+    for o in mkt.outcomes:
+        entry = {"name": o.outcome}
+        if o.price is not None:
+            entry["chance"] = f"{o.price:.1%}"
+        if o.token_id:
+            entry["token_id"] = o.token_id
+        outcomes.append(entry)
+    result: dict = {
+        "market_id": mkt.market_id,
+        "question": mkt.question,
+        "outcomes": outcomes,
+        "volume": f"${mkt.volume:,.0f}" if mkt.volume else None,
+        "active": mkt.active,
+    }
+    if mkt.description:
+        result["description"] = mkt.description[:200]
+    if mkt.end_date:
+        result["end_date"] = mkt.end_date
+    return result
 
 
 @router.get("/categories")
@@ -76,7 +187,7 @@ async def browse_markets(
 
         return SuccessResponse(
             summary=summary,
-            data=[e.model_dump() for e in events],
+            data=[_simplify_event(e) for e in events],
         )
 
     # --- Category-based browsing ---
@@ -125,7 +236,7 @@ async def browse_markets(
 
     return SuccessResponse(
         summary=summary,
-        data=[e.model_dump() for e in events],
+        data=[_simplify_event(e) for e in events],
     )
 
 
@@ -216,7 +327,7 @@ async def search_markets(
 
     return SuccessResponse(
         summary=summary,
-        data=[e.model_dump() for e in events],
+        data=[_simplify_event(e) for e in events],
     )
 
 
@@ -252,7 +363,7 @@ async def get_event(
 
     return SuccessResponse(
         summary=summary,
-        data=event.model_dump(),
+        data=_simplify_event(event),
     )
 
 
@@ -288,7 +399,7 @@ async def get_event_by_slug(
 
     return SuccessResponse(
         summary=summary,
-        data=event.model_dump(),
+        data=_simplify_event(event),
     )
 
 
@@ -387,5 +498,5 @@ async def get_market(
 
     return SuccessResponse(
         summary=summary,
-        data=market.model_dump(),
+        data=_simplify_market_detail(market),
     )

@@ -5,8 +5,6 @@ from api.config import settings
 from api.models import (
     SuccessResponse,
     ErrorResponse,
-    BalanceResponse,
-    VerifyResponse,
     PrepareDepositRequest,
     PreparePayRequest,
     SubmitTxRequest,
@@ -25,22 +23,19 @@ async def get_balance(
     deposited, consumed, remaining = await balance_svc.get_remaining(wallet_address)
     calls = balance_svc.calls_remaining(remaining)
 
-    balance_data = BalanceResponse(
-        wallet_address=wallet_address.lower(),
-        total_deposited_wei=str(deposited),
-        total_consumed_wei=str(consumed),
-        remaining_wei=str(remaining),
-        calls_remaining=calls,
-    )
+    remaining_usdt = remaining / 10**18
 
     if calls > 0:
-        summary = f"Wallet {wallet_address[:10]}... has {calls} API calls remaining ({remaining / 10**18:.4f} USDT)."
+        summary = f"Wallet {wallet_address[:10]}... has {calls} API calls remaining ({remaining_usdt:.4f} USDT)."
     else:
         summary = f"Wallet {wallet_address[:10]}... has no prepaid balance. Deposit USDT to contract {settings.contract_address} on BSC."
 
     return SuccessResponse(
         summary=summary,
-        data=balance_data.model_dump(),
+        data={
+            "calls_remaining": calls,
+            "remaining_usdt": round(remaining_usdt, 4),
+        },
     )
 
 
@@ -52,13 +47,6 @@ async def verify_payment(
     """Verify a direct payment transaction."""
     verified = await payment_svc.verify_direct_payment(tx_hash, wallet_address)
 
-    verify_data = VerifyResponse(
-        tx_hash=tx_hash,
-        verified=verified,
-        wallet_address=wallet_address.lower() if verified else None,
-        message="Payment verified successfully." if verified else f"Could not verify DirectPayment event. Ensure you called pay() on {settings.contract_address} on BSC.",
-    )
-
     if verified:
         summary = f"Transaction {tx_hash[:10]}... verified. DirectPayment from {wallet_address[:10]}... confirmed."
     else:
@@ -66,7 +54,7 @@ async def verify_payment(
 
     return SuccessResponse(
         summary=summary,
-        data=verify_data.model_dump(),
+        data={"verified": verified},
     )
 
 
