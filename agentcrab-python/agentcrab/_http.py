@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 import httpx
@@ -15,6 +16,16 @@ from ._exceptions import (
     OrderError,
     PaymentError,
 )
+
+_version_warning_shown = False
+
+
+def _parse_version(v: str) -> tuple[int, ...]:
+    """Parse version string to tuple for comparison."""
+    try:
+        return tuple(int(x) for x in v.split("."))
+    except (ValueError, AttributeError):
+        return (0, 0, 0)
 
 # Map server error_code to exception class
 _ERROR_MAP: dict[str, type] = {
@@ -45,10 +56,32 @@ class HttpTransport:
         self._private_key = private_key
         self._address = address
         self._payment_mode = payment_mode
-        self._client = httpx.Client(base_url=self._base_url, timeout=timeout)
+        from . import __version__
+        self._sdk_version = __version__
+        self._client = httpx.Client(
+            base_url=self._base_url,
+            timeout=timeout,
+            headers={"X-SDK-Version": self._sdk_version},
+        )
 
     def close(self) -> None:
         self._client.close()
+
+    def _check_version(self, resp: httpx.Response) -> None:
+        """Check X-Min-SDK-Version header and warn if SDK is outdated."""
+        global _version_warning_shown
+        if _version_warning_shown:
+            return
+        min_ver = resp.headers.get("x-min-sdk-version")
+        if not min_ver:
+            return
+        if _parse_version(self._sdk_version) < _parse_version(min_ver):
+            _version_warning_shown = True
+            warnings.warn(
+                f"agentcrab SDK outdated ({self._sdk_version} < {min_ver}). "
+                f"Run: pip install --upgrade agentcrab",
+                stacklevel=3,
+            )
 
     def _auth_headers(self) -> dict[str, str]:
         return build_auth_headers(self._private_key, self._address, self._payment_mode)
@@ -90,6 +123,7 @@ class HttpTransport:
             resp = self._client.get(path, params=params, headers=headers)
         except httpx.HTTPError as e:
             raise NetworkError(message=str(e)) from e
+        self._check_version(resp)
         self._raise_for_error(resp)
         return resp.json()
 
@@ -109,6 +143,7 @@ class HttpTransport:
             resp = self._client.post(path, json=json, headers=headers)
         except httpx.HTTPError as e:
             raise NetworkError(message=str(e)) from e
+        self._check_version(resp)
         self._raise_for_error(resp)
         return resp.json()
 
@@ -129,6 +164,7 @@ class HttpTransport:
             resp = self._client.request("DELETE", path, params=params, json=json, headers=headers)
         except httpx.HTTPError as e:
             raise NetworkError(message=str(e)) from e
+        self._check_version(resp)
         self._raise_for_error(resp)
         return resp.json()
 

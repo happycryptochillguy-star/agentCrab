@@ -8,10 +8,11 @@ HTTP API + Python SDK for Polymarket. Browse, trade, manage positions.
 
 ## Rules
 
-1. **Use the Python SDK if you can run code.** `pip install agentcrab` — handles all signing and auth. Load [SDK Guide](docs/sdk-guide.md) for full reference. If you can't run Python, use the HTTP API — load [Auth & Signing](docs/auth-and-signing.md) first.
+1. **Use the Python SDK if you can run code.** `pip install -U agentcrab` — handles all signing and auth. Load [SDK Guide](docs/sdk-guide.md) for full reference. If you can't run Python, use the HTTP API — load [Auth & Signing](docs/auth-and-signing.md) first.
 2. **Be reactive.** Only call API when the human asks. Stop after each step.
 3. **Check wallet first.** No key → ask human. No balance → tell human to deposit.
 4. **Tell costs upfront.** Before any paid call: "This costs 0.01 USDT."
+5. **NEVER hardcode private keys or secrets in code.** Store them in environment variables or `.env` files only. Do not write keys into scripts, config files, or anywhere that could be committed to git. If you create test scripts, use `os.environ["PRIVATE_KEY"]` — never a literal key string.
 
 ---
 

@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     # Admin
     admin_key: str = ""
 
+    # SDK version control
+    min_sdk_version: str = "0.1.0"
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 

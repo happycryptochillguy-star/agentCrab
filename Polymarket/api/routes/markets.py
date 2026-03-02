@@ -15,6 +15,10 @@ from api.services.categories import build_category_tree, get_tag_slugs, resolve_
 
 router = APIRouter(prefix="/markets", tags=["markets"])
 
+# Lock to prevent duplicate background sync tasks
+_bg_sync_lock = asyncio.Lock()
+_bg_sync_running = False
+
 
 def _simplify_event(ev: GammaEvent) -> dict:
     """Simplify a GammaEvent to agent-friendly format.
@@ -478,14 +482,21 @@ async def sync_history(
             data=stats,
         )
 
-    # Run sync in background so the response returns immediately
+    # Run sync in background so the response returns immediately (with dedup)
+    global _bg_sync_running
+
     async def _bg_sync():
+        global _bg_sync_running
         try:
             await history_svc.sync_historical_events()
         except Exception as e:
             logger.exception("Background history sync failed")
+        finally:
+            _bg_sync_running = False
 
-    asyncio.create_task(_bg_sync())
+    if not _bg_sync_running:
+        _bg_sync_running = True
+        asyncio.create_task(_bg_sync())
 
     stats = await history_svc.get_history_stats()
     return SuccessResponse(

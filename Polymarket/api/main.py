@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI, Request
@@ -65,8 +65,8 @@ _TIER_RULES: list[tuple[str, str]] = [
     # everything else is paid
 ]
 
-# Buckets: key = "tier:ip" → list of timestamps
-_rate_buckets: dict[str, list[float]] = defaultdict(list)
+# Buckets: key = "tier:ip" → deque of timestamps (bounded by tier limit)
+_rate_buckets: dict[str, deque] = {}
 _rate_buckets_last_cleanup = time.time()
 _CLEANUP_INTERVAL = 300  # clean stale entries every 5 min
 _MAX_BUCKET_SIZE = 50000  # emergency cap to prevent OOM
@@ -83,6 +83,7 @@ def _get_tier(path: str) -> str:
 def _check_rate_limit(client_ip: str, path: str) -> tuple[bool, str, int]:
     """Check rate limit. Returns (allowed, tier, limit).
 
+    Uses deque with maxlen for bounded memory per bucket.
     Also performs periodic cleanup of stale buckets to prevent memory leak.
     """
     global _rate_buckets_last_cleanup
@@ -92,8 +93,8 @@ def _check_rate_limit(client_ip: str, path: str) -> tuple[bool, str, int]:
     if now - _rate_buckets_last_cleanup > _CLEANUP_INTERVAL:
         _rate_buckets_last_cleanup = now
         stale_keys = [
-            k for k, ts in _rate_buckets.items()
-            if not ts or now - ts[-1] > RATE_WINDOW * 2
+            k for k, dq in _rate_buckets.items()
+            if not dq or now - dq[-1] > RATE_WINDOW * 2
         ]
         for k in stale_keys:
             del _rate_buckets[k]
@@ -109,14 +110,19 @@ def _check_rate_limit(client_ip: str, path: str) -> tuple[bool, str, int]:
     limit = _TIER_LIMITS.get(tier, 30)
     bucket_key = f"{tier}:{client_ip}"
 
-    # Prune old entries
-    timestamps = _rate_buckets[bucket_key]
-    _rate_buckets[bucket_key] = [t for t in timestamps if now - t < RATE_WINDOW]
+    if bucket_key not in _rate_buckets:
+        _rate_buckets[bucket_key] = deque(maxlen=limit)
 
-    if len(_rate_buckets[bucket_key]) >= limit:
+    timestamps = _rate_buckets[bucket_key]
+
+    # Prune old entries from left (efficient O(k) for deque)
+    while timestamps and now - timestamps[0] >= RATE_WINDOW:
+        timestamps.popleft()
+
+    if len(timestamps) >= limit:
         return False, tier, limit
 
-    _rate_buckets[bucket_key].append(now)
+    timestamps.append(now)
     return True, tier, limit
 
 
@@ -150,8 +156,10 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
 
-    # Close shared HTTP connection pools
+    # Close shared HTTP connection pools and DB
     await http_pool.close_all()
+    from api.services.balance import close_db
+    await close_db()
     logger.info("Shutdown complete")
 
 
@@ -249,7 +257,10 @@ async def rate_limit_middleware(request: Request, call_next):
                 "message": f"Too many requests ({tier} tier). Maximum {limit} requests per {RATE_WINDOW}s. Please slow down.",
             },
         )
-    return await call_next(request)
+    response = await call_next(request)
+    # SDK version header: tells agents the minimum required SDK version
+    response.headers["X-Min-SDK-Version"] = settings.min_sdk_version
+    return response
 
 
 # All Polymarket routes under /polymarket prefix.

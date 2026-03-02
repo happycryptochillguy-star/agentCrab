@@ -21,11 +21,14 @@ _direct_client: httpx.AsyncClient | None = None
 _telegram_client: httpx.AsyncClient | None = None
 
 
+_pool_limits = httpx.Limits(max_connections=100, max_keepalive_connections=20)
+
+
 def get_proxy_client() -> httpx.AsyncClient:
     """Get the shared proxy client for Polymarket API calls."""
     global _proxy_client
     if _proxy_client is None or _proxy_client.is_closed:
-        kwargs: dict = {"timeout": 30}
+        kwargs: dict = {"timeout": 30, "limits": _pool_limits}
         if settings.polymarket_proxy:
             kwargs["proxy"] = settings.polymarket_proxy
         _proxy_client = httpx.AsyncClient(**kwargs)
@@ -36,7 +39,7 @@ def get_direct_client() -> httpx.AsyncClient:
     """Get the shared direct client for non-blocked services."""
     global _direct_client
     if _direct_client is None or _direct_client.is_closed:
-        _direct_client = httpx.AsyncClient(timeout=15)
+        _direct_client = httpx.AsyncClient(timeout=15, limits=_pool_limits)
     return _direct_client
 
 
@@ -44,7 +47,7 @@ def get_telegram_client() -> httpx.AsyncClient:
     """Get the shared client for Telegram API."""
     global _telegram_client
     if _telegram_client is None or _telegram_client.is_closed:
-        kwargs: dict = {"timeout": 10}
+        kwargs: dict = {"timeout": 10, "limits": _pool_limits}
         if settings.telegram_proxy:
             kwargs["proxy"] = settings.telegram_proxy
         _telegram_client = httpx.AsyncClient(**kwargs)

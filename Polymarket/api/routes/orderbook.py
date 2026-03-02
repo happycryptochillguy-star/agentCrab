@@ -66,6 +66,14 @@ async def get_orderbooks_batch(
     wallet_address: str = Depends(verify_auth_and_payment),
 ):
     """Batch fetch orderbooks for multiple tokens. Counts as 1 API call."""
+    if not token_ids:
+        raise HTTPException(
+            status_code=400,
+            detail=ErrorResponse(
+                error_code="EMPTY_BATCH",
+                message="token_ids list must not be empty.",
+            ).model_dump(),
+        )
     if len(token_ids) > 20:
         raise HTTPException(
             status_code=400,
@@ -144,6 +152,14 @@ async def get_prices_batch(
     wallet_address: str = Depends(verify_auth_and_payment),
 ):
     """Batch fetch prices for multiple tokens. Counts as 1 API call."""
+    if not token_ids:
+        raise HTTPException(
+            status_code=400,
+            detail=ErrorResponse(
+                error_code="EMPTY_BATCH",
+                message="token_ids list must not be empty.",
+            ).model_dump(),
+        )
     if len(token_ids) > 20:
         raise HTTPException(
             status_code=400,

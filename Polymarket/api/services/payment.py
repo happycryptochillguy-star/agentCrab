@@ -198,6 +198,14 @@ async def sync_balance(wallet_address: str):
 
 _balance_cache: dict[str, tuple[int, float]] = {}  # addr -> (remaining_wei, timestamp)
 _BALANCE_CACHE_TTL = 30  # seconds
+_balance_locks: dict[str, asyncio.Lock] = {}  # per-wallet lock to prevent double-credit
+
+
+def _get_balance_lock(addr: str) -> asyncio.Lock:
+    """Get or create a per-wallet lock for balance operations."""
+    if addr not in _balance_locks:
+        _balance_locks[addr] = asyncio.Lock()
+    return _balance_locks[addr]
 
 
 async def check_prepaid_balance(wallet_address: str) -> int:
@@ -205,6 +213,7 @@ async def check_prepaid_balance(wallet_address: str) -> int:
 
     Cache is invalidated on consume() (deduction) to ensure correctness.
     On-chain sync only happens when cache is stale.
+    Per-wallet lock prevents concurrent syncs from double-crediting deposits.
     """
     addr = wallet_address.lower()
     now = time.time()
@@ -213,10 +222,16 @@ async def check_prepaid_balance(wallet_address: str) -> int:
     if cached and (now - cached[1]) < _BALANCE_CACHE_TTL:
         return cached[0]
 
-    await sync_balance(wallet_address)
-    _, _, remaining = await balance_svc.get_remaining(wallet_address)
-    _balance_cache[addr] = (remaining, now)
-    return remaining
+    async with _get_balance_lock(addr):
+        # Re-check cache inside lock (another coroutine may have just refreshed)
+        cached = _balance_cache.get(addr)
+        if cached and (now - cached[1]) < _BALANCE_CACHE_TTL:
+            return cached[0]
+
+        await sync_balance(wallet_address)
+        _, _, remaining = await balance_svc.get_remaining(wallet_address)
+        _balance_cache[addr] = (remaining, time.time())
+        return remaining
 
 
 def invalidate_balance_cache(wallet_address: str):

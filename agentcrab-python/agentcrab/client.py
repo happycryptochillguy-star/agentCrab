@@ -477,6 +477,16 @@ class AgentCrab:
                 raise SetupRequired()
         return self._l2_creds
 
+    def refresh_balance(self) -> dict:
+        """Tell the CLOB to refresh its cached balance/allowances.
+
+        Call after depositing USDC.e to Polymarket (wait 1-2 min for relay first).
+        Also called automatically during ``setup_trading()``.
+        """
+        creds = self._require_l2()
+        resp = self._http.post("/trading/refresh-balance", l2_creds=creds)
+        return _extract_data(resp)
+
     def buy(
         self,
         token_id: str,

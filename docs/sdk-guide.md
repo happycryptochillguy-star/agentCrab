@@ -3,7 +3,7 @@
 ## Install & Init
 
 ```python
-pip install agentcrab
+pip install -U agentcrab  # always use latest version
 from agentcrab import AgentCrab
 
 # With existing key:
@@ -92,7 +92,12 @@ client.deposit(amount_usdt=1.0) → DepositResult
 client.deposit_to_polymarket(amount_usdt=5.0) → DepositResult
 #   Deposits USDT to Polymarket trading balance (BSC → Polygon)
 #   Note: funds may take 1-2 minutes to appear in CLOB trading balance.
-#   Wait before placing orders after depositing.
+#   After depositing, call refresh_balance() to update the CLOB cache.
+
+client.refresh_balance() → dict
+#   Tells the CLOB to re-read on-chain balance/allowances.
+#   Call after deposit_to_polymarket() (wait 1-2 min first).
+#   Also called automatically during setup_trading().
 ```
 
 ### Search & Browse (0.01 USDT each)

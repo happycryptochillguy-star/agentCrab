@@ -10,10 +10,7 @@ import logging
 import time
 import uuid
 
-import aiosqlite
-
-from api.config import settings
-from api.services.balance import DB_PATH
+from api.services.balance import get_db, _write_lock
 from api.services import clob as clob_svc
 
 logger = logging.getLogger("agentcrab.triggers")
@@ -51,7 +48,8 @@ async def create_trigger(
     now = time.time()
     expires_at = now + expires_in_hours * 3600 if expires_in_hours else None
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    db = await get_db()
+    async with _write_lock:
         await db.execute(
             """INSERT INTO triggers
                (id, wallet_address, token_id, trigger_type, trigger_price,
@@ -101,21 +99,22 @@ async def create_trigger(
 
 async def get_trigger(trigger_id: str, wallet_address: str | None = None) -> dict | None:
     """Get a single trigger by ID. Optionally filter by wallet."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        if wallet_address:
-            row = await db.execute_fetchall(
-                "SELECT * FROM triggers WHERE id = ? AND wallet_address = ?",
-                (trigger_id, wallet_address.lower()),
-            )
-        else:
-            row = await db.execute_fetchall(
-                "SELECT * FROM triggers WHERE id = ?",
-                (trigger_id,),
-            )
-        if not row:
-            return None
-        return _row_to_dict(row[0])
+    db = await get_db()
+    db.row_factory = _row_factory
+    if wallet_address:
+        row = await db.execute_fetchall(
+            "SELECT * FROM triggers WHERE id = ? AND wallet_address = ?",
+            (trigger_id, wallet_address.lower()),
+        )
+    else:
+        row = await db.execute_fetchall(
+            "SELECT * FROM triggers WHERE id = ?",
+            (trigger_id,),
+        )
+    db.row_factory = None
+    if not row:
+        return None
+    return _row_to_dict(row[0])
 
 
 async def list_triggers(
@@ -136,15 +135,17 @@ async def list_triggers(
 
     query += " ORDER BY created_at DESC"
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        rows = await db.execute_fetchall(query, params)
-        return [_row_to_dict(r) for r in rows]
+    db = await get_db()
+    db.row_factory = _row_factory
+    rows = await db.execute_fetchall(query, params)
+    db.row_factory = None
+    return [_row_to_dict(r) for r in rows]
 
 
 async def cancel_trigger(trigger_id: str, wallet_address: str) -> bool:
     """Cancel a single trigger. Returns True if cancelled."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    db = await get_db()
+    async with _write_lock:
         cursor = await db.execute(
             "UPDATE triggers SET status = 'cancelled' WHERE id = ? AND wallet_address = ? AND status = 'active'",
             (trigger_id, wallet_address.lower()),
@@ -164,7 +165,8 @@ async def cancel_all_triggers(
         query += " AND token_id = ?"
         params.append(token_id)
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    db = await get_db()
+    async with _write_lock:
         cursor = await db.execute(query, params)
         await db.commit()
         return cursor.rowcount
@@ -225,7 +227,8 @@ async def _update_trigger_status(
 ):
     """Update trigger status after execution attempt."""
     now = time.time()
-    async with aiosqlite.connect(DB_PATH) as db:
+    db = await get_db()
+    async with _write_lock:
         await db.execute(
             """UPDATE triggers SET status = ?, triggered_at = ?, submitted_at = ?,
                result_order_id = ?, result_status = ?, result_error = ?
@@ -237,18 +240,20 @@ async def _update_trigger_status(
 
 async def _get_active_triggers() -> list[dict]:
     """Fetch all active triggers from SQLite."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        rows = await db.execute_fetchall(
-            "SELECT * FROM triggers WHERE status = 'active'"
-        )
-        return [dict(r) for r in rows]
+    db = await get_db()
+    db.row_factory = _row_factory
+    rows = await db.execute_fetchall(
+        "SELECT * FROM triggers WHERE status = 'active'"
+    )
+    db.row_factory = None
+    return [dict(r) for r in rows]
 
 
 async def _expire_old_triggers():
     """Mark expired triggers."""
     now = time.time()
-    async with aiosqlite.connect(DB_PATH) as db:
+    db = await get_db()
+    async with _write_lock:
         cursor = await db.execute(
             "UPDATE triggers SET status = 'expired' WHERE status = 'active' AND expires_at IS NOT NULL AND expires_at < ?",
             (now,),
@@ -389,6 +394,12 @@ async def trigger_monitor_loop():
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _row_factory(cursor, row):
+    """SQLite row factory that returns Row-like objects."""
+    cols = [col[0] for col in cursor.description]
+    return dict(zip(cols, row))
 
 
 def _row_to_dict(row) -> dict:

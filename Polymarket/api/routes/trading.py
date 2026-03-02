@@ -374,12 +374,27 @@ async def submit_credentials(
     except Exception:
         logger.warning("Failed to cache L2 credentials for %s (non-fatal)", wallet_address)
 
+    # Tell CLOB to refresh cached balance/allowances for this wallet.
+    # Without this, newly onboarded wallets show balance=0 even though
+    # their Safe has USDC.e and all approvals set on-chain.
+    balance_update = None
+    try:
+        balance_update = await clob_svc.update_balance_allowance(
+            api_key=api_key,
+            secret=secret,
+            passphrase=passphrase,
+            eoa_address=wallet_address,
+        )
+    except Exception:
+        logger.warning("balance-allowance/update failed for %s (non-fatal)", wallet_address)
+
     return SuccessResponse(
         summary="Polymarket L2 credentials derived and cached. Use as X-Poly-* headers for trading, or retrieve later via GET /trading/credentials.",
         data={
             "api_key": api_key,
             "secret": secret,
             "passphrase": passphrase,
+            "balance_allowance_updated": balance_update is not None,
         },
     )
 
@@ -418,11 +433,69 @@ def _get_poly_creds_no_address(
     x_poly_passphrase: str = Header(..., alias="X-Poly-Passphrase"),
 ) -> dict:
     """Extract Polymarket L2 credentials from headers (address derived server-side)."""
+    # Validate non-empty
+    if not x_poly_api_key or not x_poly_secret or not x_poly_passphrase:
+        raise HTTPException(
+            status_code=400,
+            detail=ErrorResponse(
+                error_code="INVALID_CREDENTIALS",
+                message="X-Poly-Api-Key, X-Poly-Secret, and X-Poly-Passphrase headers must all be non-empty.",
+            ).model_dump(),
+        )
+    # Validate base64 format for secret
+    import base64
+    try:
+        base64.urlsafe_b64decode(x_poly_secret)
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail=ErrorResponse(
+                error_code="INVALID_CREDENTIALS",
+                message="X-Poly-Secret is not valid base64. Check your L2 credentials.",
+            ).model_dump(),
+        )
     return {
         "api_key": x_poly_api_key,
         "secret": x_poly_secret,
         "passphrase": x_poly_passphrase,
     }
+
+
+@router.post("/refresh-balance")
+async def refresh_balance(
+    wallet_address: str = Depends(verify_auth_only),
+    creds: dict = Depends(_get_poly_creds_no_address),
+):
+    """Tell the Polymarket CLOB to refresh its cached balance/allowances.
+
+    Call this after:
+    - depositing USDC.e to Polymarket (wait 1-2 min for relay, then call)
+    - setting up trading for the first time
+    - any on-chain changes to your Safe
+
+    Free endpoint — no payment required.
+    """
+    try:
+        result = await clob_svc.update_balance_allowance(
+            api_key=creds["api_key"],
+            secret=creds["secret"],
+            passphrase=creds["passphrase"],
+            eoa_address=wallet_address,
+        )
+    except Exception as e:
+        logger.warning("balance-allowance/update failed for %s: %s", wallet_address, e)
+        raise HTTPException(
+            status_code=502,
+            detail=ErrorResponse(
+                error_code="REFRESH_FAILED",
+                message="Failed to refresh balance. Internal error, please retry.",
+            ).model_dump(),
+        )
+
+    return SuccessResponse(
+        summary="CLOB balance/allowance cache refreshed.",
+        data=result,
+    )
 
 
 @router.post("/prepare-order")
@@ -435,6 +508,23 @@ async def prepare_order(
     Agent signs with Account.sign_typed_data(domain, types, message),
     then submits signature + clob_order to POST /trading/submit-order.
     """
+    # Input validation: fail fast before hitting CLOB
+    if not (0.001 <= req.price <= 0.999):
+        raise HTTPException(
+            status_code=400,
+            detail=ErrorResponse(
+                error_code="INVALID_PRICE",
+                message=f"Price must be between 0.001 and 0.999, got {req.price}.",
+            ).model_dump(),
+        )
+    if req.size <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail=ErrorResponse(
+                error_code="INVALID_SIZE",
+                message=f"Size must be positive, got {req.size}.",
+            ).model_dump(),
+        )
     try:
         result = await clob_svc.build_order_typed_data(
             eoa_address=wallet_address,
@@ -488,6 +578,7 @@ async def submit_order(
     """Submit a signed order to Polymarket CLOB.
 
     Takes the EIP-712 signature and clob_order from prepare-order.
+    Refunds balance if CLOB submission fails.
     """
     try:
         result = await clob_svc.post_signed_order(
@@ -500,21 +591,27 @@ async def submit_order(
             eoa_address=wallet_address,
         )
     except httpx.HTTPStatusError as e:
-        logger.warning("Polymarket rejected order for %s: %s", wallet_address, e.response.text if hasattr(e, "response") else e)
+        # Refund the deducted balance on CLOB rejection
+        await balance_svc.credit_deposit(wallet_address, settings.payment_amount_wei)
+        payment_svc.invalidate_balance_cache(wallet_address)
+        logger.warning("Polymarket rejected order for %s (refunded): %s", wallet_address[:10], e.response.text if hasattr(e, "response") else e)
         raise HTTPException(
             status_code=e.response.status_code if hasattr(e, "response") else 502,
             detail=ErrorResponse(
                 error_code="ORDER_REJECTED",
-                message="Polymarket rejected the order. Please check order parameters and retry.",
+                message="Polymarket rejected the order (balance refunded). Please check order parameters and retry.",
             ).model_dump(),
         )
     except Exception as e:
-        logger.exception("Failed to submit order for %s", wallet_address)
+        # Refund the deducted balance on internal error
+        await balance_svc.credit_deposit(wallet_address, settings.payment_amount_wei)
+        payment_svc.invalidate_balance_cache(wallet_address)
+        logger.exception("Failed to submit order for %s (refunded)", wallet_address[:10])
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(
                 error_code="ORDER_ERROR",
-                message="Failed to submit order. Internal error, please retry.",
+                message="Failed to submit order (balance refunded). Internal error, please retry.",
             ).model_dump(),
         )
 
@@ -581,6 +678,25 @@ async def prepare_batch_order(
                 message="Batch must contain 1-15 orders.",
             ).model_dump(),
         )
+
+    # Validate each order's price and size
+    for i, o in enumerate(req.orders):
+        if not (0.001 <= o.price <= 0.999):
+            raise HTTPException(
+                status_code=400,
+                detail=ErrorResponse(
+                    error_code="INVALID_PRICE",
+                    message=f"Order {i}: price must be between 0.001 and 0.999, got {o.price}.",
+                ).model_dump(),
+            )
+        if o.size <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail=ErrorResponse(
+                    error_code="INVALID_SIZE",
+                    message=f"Order {i}: size must be positive, got {o.size}.",
+                ).model_dump(),
+            )
 
     orders_dicts = [
         {"token_id": o.token_id, "side": o.side, "size": o.size, "price": o.price}
@@ -690,12 +806,15 @@ async def submit_batch_order(
             eoa_address=wallet_address,
         )
     except Exception as e:
-        logger.exception("Failed to submit batch order for %s", wallet_address)
+        # Refund the full batch cost on total failure
+        await balance_svc.credit_deposit(wallet_address, total_cost_wei)
+        payment_svc.invalidate_balance_cache(wallet_address)
+        logger.exception("Failed to submit batch order for %s (refunded %d orders)", wallet_address[:10], n)
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(
                 error_code="BATCH_ORDER_ERROR",
-                message="Failed to submit batch order. Internal error, please retry.",
+                message="Failed to submit batch order (balance refunded). Internal error, please retry.",
             ).model_dump(),
         )
 

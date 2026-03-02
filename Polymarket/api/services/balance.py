@@ -1,15 +1,40 @@
-import aiosqlite
+import asyncio
 import time
+
+import aiosqlite
 
 from api.config import settings
 
 DB_PATH = settings.db_path
 
+# Shared DB connection and write lock for serialized writes.
+# WAL mode handles concurrent reads; lock prevents write contention.
+_db: aiosqlite.Connection | None = None
+_write_lock = asyncio.Lock()
+
+
+async def get_db() -> aiosqlite.Connection:
+    """Get or create the shared DB connection."""
+    global _db
+    if _db is None:
+        _db = await aiosqlite.connect(DB_PATH)
+        await _db.execute("PRAGMA journal_mode=WAL")
+        await _db.execute("PRAGMA busy_timeout=5000")
+    return _db
+
+
+async def close_db():
+    """Close the shared DB connection. Call on app shutdown."""
+    global _db
+    if _db is not None:
+        await _db.close()
+        _db = None
+
 
 async def init_db():
     """Create tables if they don't exist."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("PRAGMA journal_mode=WAL")
+    db = await get_db()
+    async with _write_lock:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS balances (
                 wallet_address TEXT PRIMARY KEY,
@@ -163,13 +188,19 @@ async def init_db():
             "CREATE INDEX IF NOT EXISTS idx_triggers_wallet ON triggers(wallet_address, status)"
         )
 
+        # === Indexes added by audit ===
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_usage_log_wallet ON usage_log(wallet_address)"
+        )
+
         await db.commit()
 
 
 async def credit_deposit(wallet_address: str, amount: int):
     """Credit a deposit to a wallet's prepaid balance."""
     addr = wallet_address.lower()
-    async with aiosqlite.connect(DB_PATH) as db:
+    db = await get_db()
+    async with _write_lock:
         await db.execute("""
             INSERT INTO balances (wallet_address, total_deposited, total_consumed)
             VALUES (?, ?, 0)
@@ -182,7 +213,8 @@ async def credit_deposit(wallet_address: str, amount: int):
 async def consume(wallet_address: str, amount: int, endpoint: str) -> bool:
     """Atomically consume from prepaid balance. Returns True if sufficient balance."""
     addr = wallet_address.lower()
-    async with aiosqlite.connect(DB_PATH) as db:
+    db = await get_db()
+    async with _write_lock:
         cursor = await db.execute(
             """UPDATE balances SET total_consumed = total_consumed + ?
                WHERE wallet_address = ? AND (total_deposited - total_consumed) >= ?""",
@@ -201,17 +233,18 @@ async def consume(wallet_address: str, amount: int, endpoint: str) -> bool:
 
 async def is_tx_used(tx_hash: str) -> bool:
     """Check if a transaction hash has already been used for payment."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        row = await db.execute_fetchall(
-            "SELECT 1 FROM used_tx_hashes WHERE tx_hash = ?",
-            (tx_hash.lower(),),
-        )
-        return len(row) > 0
+    db = await get_db()
+    row = await db.execute_fetchall(
+        "SELECT 1 FROM used_tx_hashes WHERE tx_hash = ?",
+        (tx_hash.lower(),),
+    )
+    return len(row) > 0
 
 
 async def mark_tx_used(tx_hash: str, wallet_address: str):
     """Mark a transaction hash as used."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    db = await get_db()
+    async with _write_lock:
         await db.execute(
             "INSERT OR IGNORE INTO used_tx_hashes (tx_hash, wallet_address, timestamp) VALUES (?, ?, ?)",
             (tx_hash.lower(), wallet_address.lower(), time.time()),
@@ -222,15 +255,15 @@ async def mark_tx_used(tx_hash: str, wallet_address: str):
 async def get_remaining(wallet_address: str) -> tuple[int, int, int]:
     """Return (total_deposited, total_consumed, remaining) in wei."""
     addr = wallet_address.lower()
-    async with aiosqlite.connect(DB_PATH) as db:
-        row = await db.execute_fetchall(
-            "SELECT total_deposited, total_consumed FROM balances WHERE wallet_address = ?",
-            (addr,),
-        )
-        if not row:
-            return (0, 0, 0)
-        deposited, consumed = row[0]
-        return (deposited, consumed, deposited - consumed)
+    db = await get_db()
+    row = await db.execute_fetchall(
+        "SELECT total_deposited, total_consumed FROM balances WHERE wallet_address = ?",
+        (addr,),
+    )
+    if not row:
+        return (0, 0, 0)
+    deposited, consumed = row[0]
+    return (deposited, consumed, deposited - consumed)
 
 
 def calls_remaining(remaining_wei: int) -> int:
@@ -249,7 +282,8 @@ async def save_l2_credentials(
     """Save or update L2 credentials for a wallet."""
     addr = wallet_address.lower()
     now = time.time()
-    async with aiosqlite.connect(DB_PATH) as db:
+    db = await get_db()
+    async with _write_lock:
         await db.execute(
             """INSERT INTO l2_credentials (wallet_address, api_key, secret, passphrase, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, ?)
@@ -264,12 +298,12 @@ async def save_l2_credentials(
 async def get_l2_credentials(wallet_address: str) -> dict | None:
     """Get cached L2 credentials for a wallet. Returns None if not cached."""
     addr = wallet_address.lower()
-    async with aiosqlite.connect(DB_PATH) as db:
-        rows = await db.execute_fetchall(
-            "SELECT api_key, secret, passphrase FROM l2_credentials WHERE wallet_address = ?",
-            (addr,),
-        )
-        if not rows:
-            return None
-        api_key, secret, passphrase = rows[0]
-        return {"api_key": api_key, "secret": secret, "passphrase": passphrase}
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        "SELECT api_key, secret, passphrase FROM l2_credentials WHERE wallet_address = ?",
+        (addr,),
+    )
+    if not rows:
+        return None
+    api_key, secret, passphrase = rows[0]
+    return {"api_key": api_key, "secret": secret, "passphrase": passphrase}

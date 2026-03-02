@@ -149,8 +149,9 @@ async def _fetch_price_data(client: httpx.AsyncClient, token_id: str):
             resp = await client.get(f"{settings.clob_api_url}{endpoint}", params=params)
             if resp.status_code == 200:
                 return resp.json()
-        except Exception:
-            pass
+            logger.debug("CLOB %s returned %s", endpoint, resp.status_code)
+        except Exception as e:
+            logger.debug("CLOB %s request failed: %s", endpoint, e)
         return None
 
     results = await asyncio.gather(
@@ -205,8 +206,12 @@ def _build_l2_headers(
     message = timestamp + method + path
     if body:
         message += body
+    try:
+        secret_bytes = base64.urlsafe_b64decode(secret)
+    except Exception as e:
+        raise ValueError(f"Invalid L2 secret (not valid base64): {e}") from e
     h = hmac.new(
-        base64.urlsafe_b64decode(secret),
+        secret_bytes,
         message.encode("utf-8"),
         hashlib.sha256,
     )
@@ -335,6 +340,50 @@ async def get_open_orders(
     if isinstance(data, dict) and "data" in data:
         return data["data"]
     return data
+
+
+async def update_balance_allowance(
+    api_key: str,
+    secret: str,
+    passphrase: str,
+    eoa_address: str,
+) -> dict:
+    """Tell the CLOB to refresh its cached balance and allowances for this wallet.
+
+    Must be called after setting up trading (Safe deploy + approvals + L2 creds).
+    Without this call, the CLOB reports balance=0 for newly onboarded wallets.
+
+    Calls twice: once for COLLATERAL (USDC.e), once for CONDITIONAL (CTF tokens).
+    """
+    client = get_proxy_client()
+    results = {}
+
+    # COLLATERAL (USDC.e) — no token_id needed.
+    # This is the critical call: tells the CLOB about the wallet's USDC.e balance.
+    path = "/balance-allowance/update"
+    headers = _build_l2_headers(
+        api_key, secret, passphrase, eoa_address,
+        "GET", path,
+    )
+    resp = await client.get(
+        f"{settings.clob_api_url}{path}",
+        headers=headers,
+        params={"asset_type": "COLLATERAL", "signature_type": "2"},
+    )
+    if resp.status_code == 200:
+        results["COLLATERAL"] = {"ok": True}
+        logger.info("balance-allowance/update COLLATERAL OK for %s", eoa_address)
+    else:
+        logger.warning(
+            "balance-allowance/update COLLATERAL returned %s for %s: %s",
+            resp.status_code, eoa_address, resp.text[:200],
+        )
+        results["COLLATERAL"] = {"error": resp.text[:200], "status": resp.status_code}
+
+    # CONDITIONAL (ERC1155) requires a specific token_id — skip unless provided.
+    # Most useful after buying/selling to refresh conditional token balances.
+
+    return results
 
 
 async def derive_api_credentials(
