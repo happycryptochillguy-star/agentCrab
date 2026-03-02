@@ -1,6 +1,10 @@
 """Leaderboard and other-user query endpoints."""
 
+import logging
+
 from fastapi import APIRouter, Depends, Query, HTTPException
+
+logger = logging.getLogger("agentcrab")
 
 from api.auth import verify_auth_and_payment
 from api.models import SuccessResponse, ErrorResponse
@@ -59,7 +63,8 @@ async def get_leaderboard(
     """Get top traders leaderboard."""
     try:
         entries = await lb_svc.get_leaderboard(limit=limit, offset=offset)
-    except Exception:
+    except Exception as e:
+        logger.exception("Failed to fetch leaderboard")
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(
@@ -90,7 +95,8 @@ async def get_trader_positions(
     """Get positions for any trader by wallet address."""
     try:
         positions = await lb_svc.get_trader_positions(address)
-    except Exception:
+    except Exception as e:
+        logger.exception("Failed to fetch positions for trader %s", address)
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(
@@ -121,7 +127,8 @@ async def get_trader_trades(
     """Get trade history for any trader."""
     try:
         trades = await lb_svc.get_trader_trades(address, limit=limit, offset=offset)
-    except Exception:
+    except Exception as e:
+        logger.exception("Failed to fetch trades for trader %s", address)
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(

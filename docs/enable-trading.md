@@ -79,7 +79,15 @@ Response includes L2 credentials:
 {"api_key": "...", "secret": "...", "passphrase": "..."}
 ```
 
-**Save these — they don't expire.** Include them as headers in all trading requests:
+**These are cached server-side.** On future sessions, retrieve them for free instead of re-deriving:
+
+```
+GET /trading/credentials
+Headers: auth headers
+→ {"api_key": "...", "secret": "...", "passphrase": "..."}
+```
+
+Include them as headers in all trading requests:
 
 | Header | Value |
 |--------|-------|

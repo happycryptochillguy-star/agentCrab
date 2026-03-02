@@ -15,6 +15,7 @@ from ._exceptions import (
 )
 from ._types import (
     Balance,
+    BatchOrderResult,
     DepositResult,
     Market,
     Orderbook,
@@ -23,6 +24,8 @@ from ._types import (
     Price,
     SetupResult,
     Trade,
+    Trigger,
+    TriggerResult,
 )
 
 __all__ = [
@@ -38,6 +41,7 @@ __all__ = [
     "SetupRequired",
     # Types
     "Balance",
+    "BatchOrderResult",
     "DepositResult",
     "Market",
     "Orderbook",
@@ -46,4 +50,6 @@ __all__ = [
     "Price",
     "SetupResult",
     "Trade",
+    "Trigger",
+    "TriggerResult",
 ]

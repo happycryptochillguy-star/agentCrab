@@ -1,6 +1,10 @@
 """Trigger endpoints — stop loss / take profit with pre-signed orders."""
 
+import logging
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+
+logger = logging.getLogger("agentcrab")
 
 from api.auth import verify_auth_and_payment, verify_auth_only
 from api.config import settings
@@ -65,11 +69,12 @@ async def prepare_trigger(
             price=req.exit_price,
         )
     except Exception as e:
+        logger.exception("Failed to build exit order for trigger (token=%s)", req.token_id)
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(
                 error_code="ORDER_BUILD_FAILED",
-                message=f"Failed to build exit order: {e}",
+                message="Failed to build exit order. Internal error, please retry.",
             ).model_dump(),
         )
 
@@ -141,11 +146,12 @@ async def create_trigger(
             expires_in_hours=req.expires_in_hours,
         )
     except Exception as e:
+        logger.exception("Failed to create trigger for %s (token=%s)", wallet_address, req.token_id)
         raise HTTPException(
             status_code=500,
             detail=ErrorResponse(
                 error_code="TRIGGER_CREATE_FAILED",
-                message=f"Failed to create trigger: {e}",
+                message="Failed to create trigger. Internal error, please retry.",
             ).model_dump(),
         )
 

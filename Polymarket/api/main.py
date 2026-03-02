@@ -57,9 +57,10 @@ _TIER_RULES: list[tuple[str, str]] = [
     ("/polymarket/trading/contracts", "open"),
     ("/polymarket/deposit/supported-assets", "open"),
     ("/health", "open"),
-    # prepare-* and trigger query endpoints are free (auth only)
+    # prepare-*, credentials, and trigger query endpoints are free (auth only)
     ("/polymarket/payment/", "auth"),
     ("/polymarket/trading/prepare-", "auth"),
+    ("/polymarket/trading/credentials", "auth"),
     ("/polymarket/trading/triggers/prepare", "auth"),
     # everything else is paid
 ]

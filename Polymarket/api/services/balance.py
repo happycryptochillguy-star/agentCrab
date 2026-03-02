@@ -115,6 +115,18 @@ async def init_db():
             "CREATE INDEX IF NOT EXISTS idx_tcp_addr_cat ON trader_category_positions(address, category_path)"
         )
 
+        # === L2 Credentials Cache ===
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS l2_credentials (
+                wallet_address TEXT PRIMARY KEY,
+                api_key TEXT NOT NULL,
+                secret TEXT NOT NULL,
+                passphrase TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            )
+        """)
+
         # === Triggers Table (stop loss / take profit) ===
         await db.execute("""
             CREATE TABLE IF NOT EXISTS triggers (
@@ -226,3 +238,38 @@ def calls_remaining(remaining_wei: int) -> int:
     if remaining_wei <= 0:
         return 0
     return remaining_wei // settings.payment_amount_wei
+
+
+# === L2 Credentials Cache ===
+
+
+async def save_l2_credentials(
+    wallet_address: str, api_key: str, secret: str, passphrase: str,
+):
+    """Save or update L2 credentials for a wallet."""
+    addr = wallet_address.lower()
+    now = time.time()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO l2_credentials (wallet_address, api_key, secret, passphrase, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(wallet_address)
+               DO UPDATE SET api_key = ?, secret = ?, passphrase = ?, updated_at = ?""",
+            (addr, api_key, secret, passphrase, now, now,
+             api_key, secret, passphrase, now),
+        )
+        await db.commit()
+
+
+async def get_l2_credentials(wallet_address: str) -> dict | None:
+    """Get cached L2 credentials for a wallet. Returns None if not cached."""
+    addr = wallet_address.lower()
+    async with aiosqlite.connect(DB_PATH) as db:
+        rows = await db.execute_fetchall(
+            "SELECT api_key, secret, passphrase FROM l2_credentials WHERE wallet_address = ?",
+            (addr,),
+        )
+        if not rows:
+            return None
+        api_key, secret, passphrase = rows[0]
+        return {"api_key": api_key, "secret": secret, "passphrase": passphrase}

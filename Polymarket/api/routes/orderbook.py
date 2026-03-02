@@ -1,6 +1,10 @@
 """Orderbook and price endpoints."""
 
+import logging
+
 from fastapi import APIRouter, Depends, Body, HTTPException
+
+logger = logging.getLogger("agentcrab")
 
 from api.auth import verify_auth_and_payment
 from api.models import SuccessResponse, ErrorResponse, Orderbook
@@ -33,7 +37,8 @@ async def get_orderbook(
     """Get the full orderbook for a specific token."""
     try:
         book = await clob_svc.get_orderbook(token_id)
-    except Exception:
+    except Exception as e:
+        logger.exception("Failed to fetch orderbook for token %s", token_id)
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(
@@ -72,7 +77,8 @@ async def get_orderbooks_batch(
 
     try:
         books = await clob_svc.get_orderbooks_batch(token_ids)
-    except Exception:
+    except Exception as e:
+        logger.exception("Failed to fetch batch orderbooks (%d tokens)", len(token_ids))
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(
@@ -96,7 +102,8 @@ async def get_price(
     """Get price summary for a specific token."""
     try:
         price = await clob_svc.get_price(token_id)
-    except Exception:
+    except Exception as e:
+        logger.exception("Failed to fetch price for token %s", token_id)
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(
@@ -148,7 +155,8 @@ async def get_prices_batch(
 
     try:
         prices = await clob_svc.get_prices_batch(token_ids)
-    except Exception:
+    except Exception as e:
+        logger.exception("Failed to fetch batch prices (%d tokens)", len(token_ids))
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(

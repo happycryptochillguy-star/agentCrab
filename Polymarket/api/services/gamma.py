@@ -99,6 +99,49 @@ def _parse_tags(ev: dict) -> list[str]:
     return []
 
 
+def _smart_filter(events: list[GammaEvent], query: str) -> list[GammaEvent]:
+    """Score-based search: split query into words, match against title + market questions.
+
+    Scoring:
+    - Exact full query in title:  +100
+    - Each word found in title:   +10
+    - Each word found in any market question: +5
+    - Results sorted by score (desc), then volume (desc)
+    """
+    words = [w.lower() for w in query.lower().split() if len(w) >= 2]
+    if not words:
+        return events
+
+    scored: list[tuple[int, GammaEvent]] = []
+    q_lower = query.lower()
+
+    for ev in events:
+        score = 0
+        title_lower = ev.title.lower()
+
+        # Exact full query match in title
+        if q_lower in title_lower:
+            score += 100
+
+        # Per-word matching in title
+        for w in words:
+            if w in title_lower:
+                score += 10
+
+        # Per-word matching in market questions
+        for mkt in ev.markets:
+            q_mkt = mkt.question.lower()
+            for w in words:
+                if w in q_mkt:
+                    score += 5
+
+        if score > 0:
+            scored.append((score, ev))
+
+    scored.sort(key=lambda x: (x[0], x[1].volume or 0), reverse=True)
+    return [ev for _, ev in scored]
+
+
 async def search_events(
     query: str | None = None,
     tag: str | None = None,
@@ -164,10 +207,9 @@ async def search_events(
             )
         )
 
-    # Client-side title filtering (Gamma API doesn't support text search)
+    # Client-side smart search (Gamma API doesn't support text search)
     if query:
-        q_lower = query.lower()
-        events = [e for e in events if q_lower in e.title.lower()]
+        events = _smart_filter(events, query)
         events = events[offset : offset + limit]
 
     _cache_put(ck, events)

@@ -1,8 +1,11 @@
 """Trading endpoints — order placement, cancellation, and setup guide."""
 
+import logging
 import time as _time
 
 import httpx
+
+logger = logging.getLogger("agentcrab")
 from fastapi import APIRouter, Depends, Header, Query, HTTPException, Request
 from pydantic import BaseModel
 
@@ -81,11 +84,12 @@ async def prepare_deploy_safe(
     try:
         deployed = await relayer_svc.is_safe_deployed(wallet_address)
     except Exception as e:
+        logger.exception("Failed to check Safe deployment for %s", wallet_address)
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(
                 error_code="RELAYER_ERROR",
-                message=f"Failed to check Safe deployment: {e}",
+                message="Failed to check Safe deployment. Internal error, please retry.",
             ).model_dump(),
         )
 
@@ -123,11 +127,12 @@ async def submit_deploy_safe(
     try:
         result = await relayer_svc.deploy_safe(wallet_address, req.signature)
     except Exception as e:
+        logger.exception("Failed to deploy Safe via relayer for %s", wallet_address)
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(
                 error_code="DEPLOY_FAILED",
-                message=f"Failed to deploy Safe via relayer: {e}",
+                message="Failed to deploy Safe via relayer. Internal error, please retry.",
             ).model_dump(),
         )
 
@@ -139,8 +144,9 @@ async def submit_deploy_safe(
         try:
             await relayer_svc.poll_transaction(tx_id, max_polls=30, interval=2.0)
         except Exception as e:
+            logger.warning("Safe deployment polling timed out for %s: %s", wallet_address, e)
             return SuccessResponse(
-                summary=f"Safe deployment submitted but not yet confirmed: {e}",
+                summary="Safe deployment submitted but not yet confirmed. Please check back shortly.",
                 data={
                     "safe_address": safe_address,
                     "transaction_id": tx_id,
@@ -186,11 +192,12 @@ async def prepare_enable(
     try:
         deployed = await relayer_svc.is_safe_deployed(wallet_address)
     except Exception as e:
+        logger.exception("Failed to check Safe deployment in prepare_enable for %s", wallet_address)
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(
                 error_code="RELAYER_ERROR",
-                message=f"Failed to check Safe deployment: {e}",
+                message="Failed to check Safe deployment. Internal error, please retry.",
             ).model_dump(),
         )
 
@@ -211,6 +218,7 @@ async def prepare_enable(
         approval_status = await relayer_svc.check_approval_status(safe_address)
     except Exception as e:
         # If check fails, fall back to building all approvals
+        logger.warning("Approval status check failed for %s, falling back to full approvals: %s", safe_address, e)
         approval_status = {"all_approved": False, "missing": [], "approved": []}
 
     # Build SafeTx hash only for missing approvals
@@ -222,11 +230,12 @@ async def prepare_enable(
                 wallet_address, only_missing=only_missing,
             )
         except Exception as e:
+            logger.exception("Failed to build approval data for %s", wallet_address)
             raise HTTPException(
                 status_code=502,
                 detail=ErrorResponse(
                     error_code="APPROVAL_BUILD_FAILED",
-                    message=f"Failed to build approval data: {e}",
+                    message="Failed to build approval data. Internal error, please retry.",
                 ).model_dump(),
             )
 
@@ -309,11 +318,12 @@ async def submit_approvals(
             wallet_address, req.signature, req.approval_data,
         )
     except Exception as e:
+        logger.exception("Failed to submit approvals via relayer for %s", wallet_address)
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(
                 error_code="APPROVAL_SUBMIT_FAILED",
-                message=f"Failed to submit approvals via relayer: {e}",
+                message="Failed to submit approvals via relayer. Internal error, please retry.",
             ).model_dump(),
         )
 
@@ -345,21 +355,57 @@ async def submit_credentials(
             timestamp=req.timestamp,
         )
     except Exception as e:
+        logger.exception("Failed to derive API credentials for %s", wallet_address)
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(
                 error_code="DERIVE_FAILED",
-                message=f"Failed to derive API credentials from Polymarket: {e}",
+                message="Failed to derive API credentials from Polymarket. Internal error, please retry.",
+            ).model_dump(),
+        )
+
+    api_key = creds.get("apiKey")
+    secret = creds.get("secret")
+    passphrase = creds.get("passphrase")
+
+    # Cache L2 credentials server-side for future retrieval
+    try:
+        await balance_svc.save_l2_credentials(wallet_address, api_key, secret, passphrase)
+    except Exception:
+        logger.warning("Failed to cache L2 credentials for %s (non-fatal)", wallet_address)
+
+    return SuccessResponse(
+        summary="Polymarket L2 credentials derived and cached. Use as X-Poly-* headers for trading, or retrieve later via GET /trading/credentials.",
+        data={
+            "api_key": api_key,
+            "secret": secret,
+            "passphrase": passphrase,
+        },
+    )
+
+
+@router.get("/credentials")
+async def get_credentials(
+    wallet_address: str = Depends(verify_auth_only),
+):
+    """Retrieve cached L2 trading credentials.
+
+    Free — returns credentials previously derived via submit-credentials.
+    Saves agents from re-deriving (and paying 0.01 USDT) each session.
+    """
+    creds = await balance_svc.get_l2_credentials(wallet_address)
+    if not creds:
+        raise HTTPException(
+            status_code=404,
+            detail=ErrorResponse(
+                error_code="NO_CREDENTIALS",
+                message="No cached L2 credentials found. Call POST /trading/submit-credentials first.",
             ).model_dump(),
         )
 
     return SuccessResponse(
-        summary="Polymarket L2 credentials derived. Store these securely and use as X-Poly-* headers for trading.",
-        data={
-            "api_key": creds.get("apiKey"),
-            "secret": creds.get("secret"),
-            "passphrase": creds.get("passphrase"),
-        },
+        summary="Cached L2 credentials retrieved. Use as X-Poly-* headers for trading.",
+        data=creds,
     )
 
 
@@ -398,11 +444,12 @@ async def prepare_order(
             price=req.price,
         )
     except Exception as e:
+        logger.exception("Failed to build order for %s (token=%s)", wallet_address, req.token_id)
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(
                 error_code="ORDER_BUILD_FAILED",
-                message=f"Failed to build order: {e}",
+                message="Failed to build order. Internal error, please retry.",
             ).model_dump(),
         )
 
@@ -453,20 +500,21 @@ async def submit_order(
             eoa_address=wallet_address,
         )
     except httpx.HTTPStatusError as e:
-        detail = str(e.response.text) if hasattr(e, "response") else str(e)
+        logger.warning("Polymarket rejected order for %s: %s", wallet_address, e.response.text if hasattr(e, "response") else e)
         raise HTTPException(
             status_code=e.response.status_code if hasattr(e, "response") else 502,
             detail=ErrorResponse(
                 error_code="ORDER_REJECTED",
-                message=f"Polymarket rejected the order: {detail}",
+                message="Polymarket rejected the order. Please check order parameters and retry.",
             ).model_dump(),
         )
     except Exception as e:
+        logger.exception("Failed to submit order for %s", wallet_address)
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(
                 error_code="ORDER_ERROR",
-                message=f"Failed to submit order: {e}",
+                message="Failed to submit order. Internal error, please retry.",
             ).model_dump(),
         )
 
@@ -651,11 +699,12 @@ async def submit_batch_order(
             eoa_address=wallet_address,
         )
     except Exception as e:
+        logger.exception("Failed to submit batch order for %s", wallet_address)
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(
                 error_code="BATCH_ORDER_ERROR",
-                message=f"Failed to submit batch: {e}",
+                message="Failed to submit batch order. Internal error, please retry.",
             ).model_dump(),
         )
 
@@ -710,11 +759,12 @@ async def cancel_order(
             poly_address=wallet_address,
         )
     except Exception as e:
+        logger.exception("Failed to cancel order %s for %s", order_id, wallet_address)
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(
                 error_code="CANCEL_ERROR",
-                message=f"Failed to cancel order: {e}",
+                message="Failed to cancel order. Internal error, please retry.",
             ).model_dump(),
         )
 
@@ -736,11 +786,12 @@ async def cancel_orders(
             poly_address=wallet_address,
         )
     except Exception as e:
+        logger.exception("Failed to cancel all orders for %s", wallet_address)
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(
                 error_code="CANCEL_ERROR",
-                message=f"Failed to cancel orders: {e}",
+                message="Failed to cancel orders. Internal error, please retry.",
             ).model_dump(),
         )
 
@@ -764,11 +815,12 @@ async def get_open_orders(
             market=market,
         )
     except Exception as e:
+        logger.exception("Failed to fetch open orders for %s", wallet_address)
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(
                 error_code="UPSTREAM_ERROR",
-                message=f"Failed to fetch open orders: {e}",
+                message="Failed to fetch open orders. Internal error, please retry.",
             ).model_dump(),
         )
 

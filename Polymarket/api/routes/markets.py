@@ -1,8 +1,11 @@
 """Market search, browsing, and details endpoints — all categories."""
 
 import asyncio
+import logging
 
 from fastapi import APIRouter, Depends, Query, HTTPException
+
+logger = logging.getLogger("agentcrab")
 
 from api.auth import verify_auth_and_payment, verify_auth_only
 from api.models import SuccessResponse, ErrorResponse, GammaEvent, GammaMarketDetail
@@ -172,7 +175,8 @@ async def browse_markets(
 
         try:
             events = await gamma_svc.browse_by_mood(mood=mood, limit=limit, offset=offset)
-        except Exception:
+        except Exception as e:
+            logger.exception("Failed to browse markets by mood '%s'", mood)
             raise HTTPException(
                 status_code=502,
                 detail=ErrorResponse(
@@ -221,7 +225,8 @@ async def browse_markets(
         events = await gamma_svc.browse_by_tags(
             tag_slugs=tag_slugs, limit=limit, offset=offset, closed=closed
         )
-    except Exception:
+    except Exception as e:
+        logger.exception("Failed to browse markets by category '%s'", category)
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(
@@ -251,7 +256,8 @@ async def get_tags():
     """Get all available Polymarket tags. Free, no auth required."""
     try:
         tags = await gamma_svc.get_tags()
-    except Exception:
+    except Exception as e:
+        logger.exception("Failed to fetch tags from Polymarket")
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(
@@ -293,7 +299,8 @@ async def search_markets(
             events = await gamma_svc.browse_by_tags(
                 tag_slugs=tag_slugs, query=query, limit=limit, offset=offset, closed=closed
             )
-        except Exception:
+        except Exception as e:
+            logger.exception("Failed to search Polymarket events by category '%s'", category)
             raise HTTPException(
                 status_code=502,
                 detail=ErrorResponse(
@@ -306,7 +313,8 @@ async def search_markets(
             events = await gamma_svc.search_events(
                 query=query, tag=tag, limit=limit, offset=offset, closed=closed
             )
-        except Exception:
+        except Exception as e:
+            logger.exception("Failed to search Polymarket events (query=%s, tag=%s)", query, tag)
             raise HTTPException(
                 status_code=502,
                 detail=ErrorResponse(
@@ -316,10 +324,26 @@ async def search_markets(
             )
 
     total = len(events)
-    if total == 0:
+    if total == 0 and query:
+        # No exact match — return top trending as suggestions so agent is never empty-handed
+        try:
+            suggestions = await gamma_svc.browse_by_mood(mood="trending", limit=5)
+        except Exception:
+            suggestions = []
+        suggestion_titles = [f'"{s.title}"' for s in suggestions[:5]]
+        summary = (
+            f"No events found for '{query}' on Polymarket. "
+            f"Try different keywords, or browse trending markets. "
+            f"Suggestions: {', '.join(suggestion_titles)}."
+            if suggestion_titles
+            else f"No events found for '{query}' on Polymarket. Try browse(mood='trending') instead."
+        )
+        return SuccessResponse(
+            summary=summary,
+            data=[_simplify_event(s) for s in suggestions],
+        )
+    elif total == 0:
         summary = "No events found on Polymarket matching your search."
-        if query:
-            summary = f"No events found for '{query}' on Polymarket."
     else:
         top = max(events, key=lambda e: e.volume or 0)
         top_vol = f"${top.volume:,.0f}" if top.volume else "N/A"
@@ -345,7 +369,8 @@ async def get_event(
     """Get detailed information about a specific event."""
     try:
         event = await gamma_svc.get_event_by_id(event_id)
-    except Exception:
+    except Exception as e:
+        logger.exception("Failed to fetch event %s from Polymarket", event_id)
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(
@@ -381,7 +406,8 @@ async def get_event_by_slug(
     """Get event details by slug."""
     try:
         event = await gamma_svc.get_event_by_slug(slug)
-    except Exception:
+    except Exception as e:
+        logger.exception("Failed to fetch event by slug '%s' from Polymarket", slug)
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(
@@ -457,8 +483,7 @@ async def sync_history(
         try:
             await history_svc.sync_historical_events()
         except Exception as e:
-            import logging
-            logging.getLogger("agentcrab.history").error(f"Background sync failed: {e}")
+            logger.exception("Background history sync failed")
 
     asyncio.create_task(_bg_sync())
 
@@ -477,7 +502,8 @@ async def get_market(
     """Get detailed information about a specific market."""
     try:
         market = await gamma_svc.get_market_by_id(market_id)
-    except Exception:
+    except Exception as e:
+        logger.exception("Failed to fetch market %s from Polymarket", market_id)
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(

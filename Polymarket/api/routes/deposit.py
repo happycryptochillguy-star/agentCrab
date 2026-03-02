@@ -1,8 +1,11 @@
 """Deposit and withdrawal endpoints — Polymarket native bridge."""
 
 import asyncio
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException
+
+logger = logging.getLogger("agentcrab")
 
 from web3 import Web3
 
@@ -33,7 +36,8 @@ async def create_deposit(
     """
     try:
         result = await bridge_svc.create_deposit_address(req.polymarket_address)
-    except Exception:
+    except Exception as e:
+        logger.exception("Failed to create deposit address for %s", req.polymarket_address)
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(
@@ -76,7 +80,8 @@ async def create_withdraw(
             to_token_address=req.to_token_address,
             recipient_address=req.recipient_address,
         )
-    except Exception:
+    except Exception as e:
+        logger.exception("Failed to create withdrawal address for %s", req.polymarket_address)
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(
@@ -121,11 +126,12 @@ async def prepare_transfer(
     try:
         safe_address = payment_svc.derive_safe_address(wallet_address)
     except Exception as e:
+        logger.exception("Failed to derive Safe address for %s", wallet_address)
         raise HTTPException(
             status_code=500,
             detail=ErrorResponse(
                 error_code="SAFE_DERIVATION_FAILED",
-                message=f"Failed to derive Safe address: {e}",
+                message="Failed to derive Safe address. Internal error, please retry.",
             ).model_dump(),
         )
 
@@ -140,11 +146,12 @@ async def prepare_transfer(
             to_amount_usdc=to_amount_usdc,
         )
     except Exception as e:
+        logger.exception("Failed to get deposit quote for %s (amount=%s)", wallet_address, to_amount_usdc)
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(
                 error_code="QUOTE_FAILED",
-                message=f"Failed to get deposit quote: {e}",
+                message="Failed to get deposit quote. Internal error, please retry.",
             ).model_dump(),
         )
 
@@ -176,7 +183,8 @@ async def prepare_transfer(
                         "data": raw_tx["data"],
                         "value": tx["value"],
                     })
-                except Exception:
+                except Exception as e:
+                    logger.warning("Gas estimation failed, using default 200k: %s", e)
                     tx["gas"] = 200_000
             if "maxFeePerGas" in raw_tx:
                 tx["maxFeePerGas"] = int(raw_tx["maxFeePerGas"])
@@ -217,7 +225,8 @@ async def get_supported_assets():
     """
     try:
         assets = await bridge_svc.get_supported_assets()
-    except Exception:
+    except Exception as e:
+        logger.exception("Failed to fetch supported assets from Polymarket")
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(

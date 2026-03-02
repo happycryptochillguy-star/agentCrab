@@ -1,6 +1,10 @@
 """Positions, trades, and activity endpoints."""
 
+import logging
+
 from fastapi import APIRouter, Depends, Query, HTTPException
+
+logger = logging.getLogger("agentcrab")
 
 from api.auth import verify_auth_and_payment
 from api.models import SuccessResponse, ErrorResponse
@@ -50,7 +54,8 @@ async def get_positions(
     safe_address = derive_safe_address(wallet_address)
     try:
         positions = await data_api.get_positions(safe_address)
-    except Exception:
+    except Exception as e:
+        logger.exception("Failed to fetch positions for %s", safe_address)
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(
@@ -90,7 +95,8 @@ async def get_trades(
     safe_address = derive_safe_address(wallet_address)
     try:
         trades = await data_api.get_trades(safe_address, limit=limit, offset=offset)
-    except Exception:
+    except Exception as e:
+        logger.exception("Failed to fetch trades for %s", safe_address)
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(
@@ -121,7 +127,8 @@ async def get_activity(
     safe_address = derive_safe_address(wallet_address)
     try:
         activities = await data_api.get_activity(safe_address, limit=limit, offset=offset)
-    except Exception:
+    except Exception as e:
+        logger.exception("Failed to fetch activity for %s", safe_address)
         raise HTTPException(
             status_code=502,
             detail=ErrorResponse(

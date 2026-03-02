@@ -364,9 +364,15 @@ class AgentCrab:
     def setup_trading(self) -> SetupResult:
         """One-call trading setup: Safe deploy + approvals + L2 credentials.
 
-        Idempotent — skips steps already completed.
+        Idempotent — skips steps already completed. Tries server-cached
+        credentials first to avoid re-deriving (saves 0.01 USDT on repeat sessions).
         """
         steps: list[str] = []
+
+        # Step 0: Try cached credentials first (free)
+        cached = self._fetch_cached_credentials()
+        if cached:
+            steps.append("credentials_cached")
 
         # Step 1: Deploy Safe (if needed)
         prep_safe = self._http.post("/trading/prepare-deploy-safe")
@@ -403,20 +409,25 @@ class AgentCrab:
         else:
             steps.append("approvals_already_set")
 
-        # Step 4: Derive L2 credentials
-        clob_typed_data = enable_data["clob_typed_data"]
-        timestamp = clob_typed_data["message"]["timestamp"]
-        sig = sign_typed_data(self._private_key, clob_typed_data)
-        creds_resp = self._http.post(
-            "/trading/submit-credentials",
-            json={"signature": sig, "timestamp": timestamp},
-            paid=True,
-        )
-        creds_data = _extract_data(creds_resp)
-
-        api_key = creds_data["api_key"]
-        secret = creds_data["secret"]
-        passphrase = creds_data["passphrase"]
+        # Step 4: Use cached creds or derive new ones
+        if cached:
+            api_key = cached["api_key"]
+            secret = cached["secret"]
+            passphrase = cached["passphrase"]
+        else:
+            clob_typed_data = enable_data["clob_typed_data"]
+            timestamp = clob_typed_data["message"]["timestamp"]
+            sig = sign_typed_data(self._private_key, clob_typed_data)
+            creds_resp = self._http.post(
+                "/trading/submit-credentials",
+                json={"signature": sig, "timestamp": timestamp},
+                paid=True,
+            )
+            creds_data = _extract_data(creds_resp)
+            api_key = creds_data["api_key"]
+            secret = creds_data["secret"]
+            passphrase = creds_data["passphrase"]
+            steps.append("credentials_derived")
 
         # Store for future trading calls
         self._l2_creds = {
@@ -424,7 +435,6 @@ class AgentCrab:
             "secret": secret,
             "passphrase": passphrase,
         }
-        steps.append("credentials_derived")
 
         return SetupResult(
             safe_address=safe_address,
@@ -432,16 +442,32 @@ class AgentCrab:
             secret=secret,
             passphrase=passphrase,
             steps_completed=steps,
-            raw=creds_data,
+            raw={"api_key": api_key, "secret": secret, "passphrase": passphrase},
         )
 
     # ------------------------------------------------------------------
     # Trading
     # ------------------------------------------------------------------
 
+    def _fetch_cached_credentials(self) -> dict | None:
+        """Try to fetch cached L2 credentials from the server (free)."""
+        try:
+            resp = self._http.get("/trading/credentials")
+            data = _extract_data(resp)
+            if data and data.get("api_key"):
+                return data
+        except Exception:
+            pass
+        return None
+
     def _require_l2(self) -> dict:
         if not self._l2_creds:
-            raise SetupRequired()
+            # Try server cache before raising
+            cached = self._fetch_cached_credentials()
+            if cached:
+                self._l2_creds = cached
+            else:
+                raise SetupRequired()
         return self._l2_creds
 
     def buy(

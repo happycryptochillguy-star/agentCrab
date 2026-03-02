@@ -146,6 +146,49 @@ async def get_capabilities():
                         "method": "GET",
                         "description": "List supported chains/tokens for Polymarket deposits.",
                     },
+                    {
+                        "path": "/trading/credentials",
+                        "method": "GET",
+                        "description": "Retrieve cached L2 trading credentials (from a previous submit-credentials call). Free, saves re-deriving each session.",
+                    },
+                    {
+                        "path": "/trading/prepare-order",
+                        "method": "POST",
+                        "description": "Build EIP-712 typed data for a single order. Auth required, no payment.",
+                        "body": {"token_id": "str", "side": "BUY|SELL", "size": "float", "price": "float"},
+                    },
+                    {
+                        "path": "/trading/prepare-batch-order",
+                        "method": "POST",
+                        "description": "Build EIP-712 typed data for multiple orders at once (max 15). Auth required, no payment.",
+                        "body": {"orders": "[{token_id, side, size, price}, ...]"},
+                    },
+                    {
+                        "path": "/trading/triggers/prepare",
+                        "method": "POST",
+                        "description": "Build EIP-712 typed data for a trigger's exit order (stop loss / take profit). Auth required, no payment.",
+                        "body": {"token_id": "str", "trigger_type": "stop_loss|take_profit", "trigger_price": "float", "exit_side": "BUY|SELL", "size": "float", "exit_price": "float"},
+                    },
+                    {
+                        "path": "/trading/triggers",
+                        "method": "GET",
+                        "description": "List your triggers. Optional ?status= filter (active, triggered, cancelled, failed, expired). Auth required, no payment.",
+                    },
+                    {
+                        "path": "/trading/triggers/{trigger_id}",
+                        "method": "GET",
+                        "description": "Get a single trigger by ID. Auth required, no payment.",
+                    },
+                    {
+                        "path": "/trading/triggers/{trigger_id}",
+                        "method": "DELETE",
+                        "description": "Cancel a single trigger. Auth required, no payment.",
+                    },
+                    {
+                        "path": "/trading/triggers",
+                        "method": "DELETE",
+                        "description": "Cancel all active triggers. Optional ?token_id= filter. Auth required, no payment.",
+                    },
                 ],
                 "paid_account_setup": [
                     {
@@ -306,6 +349,13 @@ async def get_capabilities():
                         "extra_headers": ["X-Poly-Api-Key", "X-Poly-Secret", "X-Poly-Passphrase"],
                     },
                     {
+                        "path": "/trading/submit-batch-order",
+                        "method": "POST",
+                        "description": "Submit multiple signed orders at once. Cost: N x 0.01 USDT. Requires L2 headers.",
+                        "body": {"orders": "[{signature, clob_order, order_type}, ...] (max 15)"},
+                        "extra_headers": ["X-Poly-Api-Key", "X-Poly-Secret", "X-Poly-Passphrase"],
+                    },
+                    {
                         "path": "/trading/order/{order_id}",
                         "method": "DELETE",
                         "description": "Cancel single order. Requires L2 headers.",
@@ -319,6 +369,13 @@ async def get_capabilities():
                         "path": "/trading/orders",
                         "method": "GET",
                         "description": "Get open orders. Requires L2 headers.",
+                    },
+                    {
+                        "path": "/trading/triggers/create",
+                        "method": "POST",
+                        "description": "Create a stop loss or take profit trigger with a pre-signed exit order. Server monitors prices every 30s and auto-submits when triggered. 0.01 USDT. Requires L2 headers.",
+                        "body": {"signature": "str", "clob_order": "dict", "token_id": "str", "trigger_type": "stop_loss|take_profit", "trigger_price": "float", "exit_side": "BUY|SELL"},
+                        "extra_headers": ["X-Poly-Api-Key", "X-Poly-Secret", "X-Poly-Passphrase"],
                     },
                 ],
             },
@@ -390,6 +447,8 @@ async def get_capabilities():
                 "deposit_to_polymarket": "prepare-transfer → sign → submit-tx",
                 "enable_trading": "prepare-deploy-safe → sign → submit-deploy-safe → prepare-enable → sign → submit-approvals + submit-credentials",
                 "place_order": "prepare-order → sign → submit-order",
+                "batch_order": "prepare-batch-order → sign each typed_data → submit-batch-order (N × 0.01 USDT)",
+                "stop_loss_take_profit": "triggers/prepare → sign → triggers/create (0.01 USDT). Server monitors prices every 30s and auto-submits when triggered.",
             },
         },
     }

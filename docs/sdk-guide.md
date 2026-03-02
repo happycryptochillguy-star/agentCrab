@@ -73,7 +73,7 @@ except SetupRequired:
 # result.order_id, result.status, result.success
 ```
 
-**Note:** `setup_trading()` stores L2 credentials in memory. Call it once per session. On repeat sessions it only re-derives credentials (Safe + approvals are already on-chain), costing 0.01 USDT.
+**Note:** `setup_trading()` caches L2 credentials on the server. On repeat sessions it retrieves cached credentials for free (Safe + approvals are already on-chain), costing 0 USDT. Only the first-ever call costs 0.01-0.03 USDT.
 
 ## All Methods
 

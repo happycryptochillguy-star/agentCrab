@@ -1,6 +1,10 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.auth import verify_auth_only
+
+logger = logging.getLogger("agentcrab")
 from api.config import settings
 from api.models import (
     SuccessResponse,
@@ -85,11 +89,12 @@ async def prepare_deposit(
     try:
         txs = await payment_svc.build_deposit_txs_async(wallet_address, amount_wei)
     except Exception as e:
+        logger.exception("Failed to build deposit transactions for %s", wallet_address)
         raise HTTPException(
             status_code=500,
             detail=ErrorResponse(
                 error_code="TX_BUILD_FAILED",
-                message=f"Failed to build transactions: {e}",
+                message="Failed to build transactions. Internal error, please retry.",
             ).model_dump(),
         )
 
@@ -120,11 +125,12 @@ async def prepare_pay(
     try:
         txs = await payment_svc.build_pay_tx_async(wallet_address)
     except Exception as e:
+        logger.exception("Failed to build pay transactions for %s", wallet_address)
         raise HTTPException(
             status_code=500,
             detail=ErrorResponse(
                 error_code="TX_BUILD_FAILED",
-                message=f"Failed to build transactions: {e}",
+                message="Failed to build transactions. Internal error, please retry.",
             ).model_dump(),
         )
 
@@ -174,19 +180,21 @@ async def submit_tx(
         try:
             hashes = await payment_svc.broadcast_signed_txs(req.signed_txs, chain=req.chain)
         except RuntimeError as e:
+            logger.warning("Batch tx reverted on %s: %s", req.chain, e)
             raise HTTPException(
                 status_code=400,
                 detail=ErrorResponse(
                     error_code="TX_REVERTED",
-                    message=str(e),
+                    message="Transaction reverted. Please check inputs and retry.",
                 ).model_dump(),
             )
         except Exception as e:
+            logger.exception("Failed to broadcast batch transactions on %s", req.chain)
             raise HTTPException(
                 status_code=500,
                 detail=ErrorResponse(
                     error_code="BROADCAST_FAILED",
-                    message=f"Failed to broadcast transactions: {e}",
+                    message="Failed to broadcast transactions. Internal error, please retry.",
                 ).model_dump(),
             )
 
@@ -199,19 +207,21 @@ async def submit_tx(
     try:
         tx_hash = await payment_svc.broadcast_signed_tx(req.signed_tx, chain=req.chain)
     except RuntimeError as e:
+        logger.warning("Single tx reverted on %s: %s", req.chain, e)
         raise HTTPException(
             status_code=400,
             detail=ErrorResponse(
                 error_code="TX_REVERTED",
-                message=str(e),
+                message="Transaction reverted. Please check inputs and retry.",
             ).model_dump(),
         )
     except Exception as e:
+        logger.exception("Failed to broadcast single transaction on %s", req.chain)
         raise HTTPException(
             status_code=500,
             detail=ErrorResponse(
                 error_code="BROADCAST_FAILED",
-                message=f"Failed to broadcast transaction: {e}",
+                message="Failed to broadcast transaction. Internal error, please retry.",
             ).model_dump(),
         )
 

@@ -54,26 +54,18 @@ async def verify_auth_and_payment(
             )
 
     elif x_payment_mode == "prepaid":
-        remaining = await payment_svc.check_prepaid_balance(x_wallet_address)
-        if remaining < settings.payment_amount_wei:
-            raise HTTPException(
-                status_code=402,
-                detail=ErrorResponse(
-                    error_code="INSUFFICIENT_BALANCE",
-                    message=f"Insufficient prepaid balance. Your remaining balance is {remaining} wei. Deposit USDT to contract {settings.contract_address} on BSC (chain ID 56). Each API call costs {settings.payment_amount_wei} wei (0.01 USDT).",
-                ).model_dump(),
-            )
+        # Atomic check-and-deduct in a single SQL UPDATE with WHERE guard.
+        # No separate balance check — prevents race condition with concurrent requests.
         consumed = await balance_svc.consume(
             x_wallet_address, settings.payment_amount_wei, endpoint
         )
-        if consumed:
-            payment_svc.invalidate_balance_cache(x_wallet_address)
+        payment_svc.invalidate_balance_cache(x_wallet_address)
         if not consumed:
             raise HTTPException(
                 status_code=402,
                 detail=ErrorResponse(
-                    error_code="BALANCE_DEDUCTION_FAILED",
-                    message="Failed to deduct from prepaid balance. Please try again.",
+                    error_code="INSUFFICIENT_BALANCE",
+                    message=f"Insufficient prepaid balance. Deposit USDT to contract {settings.contract_address} on BSC (chain ID 56). Each API call costs 0.01 USDT.",
                 ).model_dump(),
             )
 
