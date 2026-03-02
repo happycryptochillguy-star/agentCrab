@@ -8,10 +8,12 @@ from typing import Any
 
 @dataclass
 class Balance:
-    """Prepaid balance on agentCrab."""
+    """Prepaid balance on agentCrab + Polymarket trading balance."""
     wallet_address: str
     remaining_wei: str
     calls_remaining: int
+    safe_address: str = ""
+    trading_balance_usdc: float = 0.0
     total_deposited_wei: str = ""
     total_consumed_wei: str = ""
     raw: dict = field(default_factory=dict, repr=False)

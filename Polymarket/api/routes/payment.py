@@ -23,23 +23,40 @@ router = APIRouter(prefix="/payment", tags=["payment"])
 async def get_balance(
     wallet_address: str = Depends(verify_auth_only),
 ):
-    """Get prepaid balance for a wallet."""
+    """Get prepaid balance and Polymarket trading balance for a wallet."""
     await payment_svc.sync_balance(wallet_address)
     deposited, consumed, remaining = await balance_svc.get_remaining(wallet_address)
     calls = balance_svc.calls_remaining(remaining)
 
     remaining_usdt = remaining / 10**18
 
+    # Derive Safe address (pure CREATE2 math, no RPC call)
+    safe_address = payment_svc.derive_safe_address(wallet_address)
+
+    # Query Polymarket trading balance (USDC.e on Polygon Safe)
+    trading_balance_usdc = 0.0
+    try:
+        raw_bal = await payment_svc.get_polygon_usdc_balance_async(safe_address)
+        trading_balance_usdc = round(raw_bal / 1e6, 4)  # USDC.e has 6 decimals
+    except Exception:
+        logger.warning("Failed to fetch Polygon USDC balance for %s", safe_address)
+
+    # Build summary
+    parts = []
     if calls > 0:
-        summary = f"Wallet {wallet_address[:10]}... has {calls} API calls remaining ({remaining_usdt:.4f} USDT)."
+        parts.append(f"{calls} API calls remaining ({remaining_usdt:.4f} USDT)")
     else:
-        summary = f"Wallet {wallet_address[:10]}... has no prepaid balance. Deposit USDT to contract {settings.contract_address} on BSC."
+        parts.append(f"No prepaid balance. Deposit USDT to contract {settings.contract_address} on BSC")
+    parts.append(f"Polymarket trading balance: {trading_balance_usdc} USDC")
+    summary = f"Wallet {wallet_address[:10]}...: {'. '.join(parts)}."
 
     return SuccessResponse(
         summary=summary,
         data={
             "calls_remaining": calls,
             "remaining_usdt": round(remaining_usdt, 4),
+            "safe_address": safe_address,
+            "trading_balance_usdc": trading_balance_usdc,
         },
     )
 

@@ -99,14 +99,61 @@ def _parse_tags(ev: dict) -> list[str]:
     return []
 
 
+# Keyword → Gamma tag_slug mapping for auto-detection.
+# Each keyword (lowercase) maps to a tag_slug that narrows Gamma API results.
+_TAG_KEYWORDS: dict[str, str] = {
+    "nba": "nba", "basketball": "nba",
+    "nfl": "nfl", "football": "nfl", "super bowl": "nfl", "superbowl": "nfl",
+    "soccer": "soccer", "epl": "EPL", "premier league": "EPL",
+    "champions league": "ucl", "ucl": "ucl",
+    "la liga": "la-liga", "ligue 1": "ligue-1",
+    "f1": "f1", "formula 1": "formula1", "formula1": "formula1",
+    "mlb": "mlb", "baseball": "mlb",
+    "nhl": "nhl", "hockey": "nhl",
+    "ufc": "ufc", "mma": "ufc", "boxing": "boxing",
+    "tennis": "tennis",
+    "bitcoin": "bitcoin", "btc": "bitcoin",
+    "ethereum": "ethereum", "eth": "ethereum",
+    "solana": "solana", "sol": "solana",
+    "crypto": "crypto",
+    "trump": "trump",
+    "election": "elections", "elections": "elections",
+    "fed": "fed", "federal reserve": "fed",
+    "ai": "ai", "openai": "openai",
+}
+
+
+def _infer_tag(query: str) -> str | None:
+    """Auto-detect a Gamma tag_slug from query keywords.
+
+    Checks multi-word phrases first, then single words.
+    Returns the first match or None.
+    """
+    q = query.lower()
+    # Check multi-word phrases first (longer matches are more specific)
+    for phrase in sorted(_TAG_KEYWORDS, key=len, reverse=True):
+        if " " in phrase and phrase in q:
+            return _TAG_KEYWORDS[phrase]
+    # Then single words
+    for word in q.split():
+        word = word.strip(".,!?\"'")
+        if word in _TAG_KEYWORDS:
+            return _TAG_KEYWORDS[word]
+    return None
+
+
 def _smart_filter(events: list[GammaEvent], query: str) -> list[GammaEvent]:
     """Score-based search: split query into words, match against title + market questions.
 
     Scoring:
     - Exact full query in title:  +100
     - Each word found in title:   +10
-    - Each word found in any market question: +5
+    - Each word found in ANY market question: +5  (boolean per word, not per market)
     - Results sorted by score (desc), then volume (desc)
+
+    The market question score is capped per word (not per market) to prevent
+    events with many sub-markets (e.g. stat leaders with 50 player outcomes)
+    from outscoring events with exact title matches.
     """
     words = [w.lower() for w in query.lower().split() if len(w) >= 2]
     if not words:
@@ -128,12 +175,11 @@ def _smart_filter(events: list[GammaEvent], query: str) -> list[GammaEvent]:
             if w in title_lower:
                 score += 10
 
-        # Per-word matching in market questions
-        for mkt in ev.markets:
-            q_mkt = mkt.question.lower()
-            for w in words:
-                if w in q_mkt:
-                    score += 5
+        # Per-word matching in market questions (boolean: +5 if word appears
+        # in ANY market question, regardless of how many markets contain it)
+        for w in words:
+            if any(w in mkt.question.lower() for mkt in ev.markets):
+                score += 5
 
         if score > 0:
             scored.append((score, ev))
@@ -154,10 +200,53 @@ async def search_events(
     NOTE: Gamma API's `title` param does NOT filter by title — it's ignored.
     We fetch a larger batch and do client-side title matching when `query` is set.
     The `tag_slug` param works correctly for category filtering.
+
+    When no tag is provided, we auto-detect tags from the query keywords
+    (e.g. "NBA Champion" → tag_slug=nba) to narrow the Gamma API results.
+    If auto-tag produces poor results, we fall back to untagged broad search.
     """
-    # Gamma API ignores the `title` param, so we fetch more and filter client-side.
-    # Without a tag, we need a large fetch because the target events may be far down
-    # the volume-sorted list. With a tag, fewer results so smaller multiplier suffices.
+    # Check cache first
+    ck = _cache_key(query, tag, limit, offset, closed)
+    cached = _cache_get(ck)
+    if cached is not None:
+        return cached
+
+    # Auto-detect tag from query keywords when no explicit tag is provided.
+    # This dramatically improves search for queries like "NBA Champion",
+    # "Bitcoin price", "Trump election" by narrowing the Gamma API results.
+    auto_tag = None
+    if query and not tag:
+        auto_tag = _infer_tag(query)
+
+    events = await _fetch_search_results(query, tag or auto_tag, limit, offset, closed)
+
+    # If auto-tag produced too few results, fall back to broad untagged search
+    if auto_tag and len(events) < limit:
+        broad = await _fetch_search_results(query, None, limit, offset, closed)
+        # Merge: auto-tag results first (better precision), then broad results
+        seen_ids = {e.event_id for e in events}
+        for ev in broad:
+            if ev.event_id not in seen_ids:
+                events.append(ev)
+                seen_ids.add(ev.event_id)
+
+    # Client-side smart search (Gamma API doesn't support text search)
+    if query:
+        events = _smart_filter(events, query)
+        events = events[offset : offset + limit]
+
+    _cache_put(ck, events)
+    return events
+
+
+async def _fetch_search_results(
+    query: str | None,
+    tag: str | None,
+    limit: int,
+    offset: int,
+    closed: bool,
+) -> list[GammaEvent]:
+    """Fetch raw events from Gamma API for search."""
     if query and not tag:
         fetch_limit = max(limit * 10, 500)
     elif query:
@@ -176,12 +265,6 @@ async def search_events(
     }
     if tag:
         params["tag_slug"] = tag
-
-    # Check cache first
-    ck = _cache_key(query, tag, limit, offset, closed)
-    cached = _cache_get(ck)
-    if cached is not None:
-        return cached
 
     client = get_proxy_client()
     resp = await client.get(f"{settings.gamma_api_url}/events", params=params)
@@ -206,13 +289,6 @@ async def search_events(
                 image=ev.get("image"),
             )
         )
-
-    # Client-side smart search (Gamma API doesn't support text search)
-    if query:
-        events = _smart_filter(events, query)
-        events = events[offset : offset + limit]
-
-    _cache_put(ck, events)
     return events
 
 

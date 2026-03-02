@@ -48,8 +48,11 @@ result = client.buy(outcome["token_id"], size=5.0, price=float(orderbook.best_as
 ## Typical Flow
 
 ```python
-# 1. Check balance
+# 1. Check balance (API calls + Polymarket USDC + Safe address)
 bal = client.get_balance()
+# bal.calls_remaining = 145      ← API calls left
+# bal.trading_balance_usdc = 3.5 ← USDC on Polymarket
+# bal.safe_address = "0x..."     ← your trading wallet
 if bal.calls_remaining == 0:
     client.deposit(1.0)  # deposit 1 USDT (= 100 calls)
 
@@ -79,7 +82,9 @@ result = client.buy(yes_token, size=5.0, price=0.65)
 
 ```python
 client.get_balance() → Balance
-#   .calls_remaining (int), .remaining_wei (str)
+#   .calls_remaining (int)          ← API calls left
+#   .trading_balance_usdc (float)   ← USDC available for trading on Polymarket
+#   .safe_address (str)             ← Polymarket trading wallet address
 
 client.deposit(amount_usdt=1.0) → DepositResult
 #   .tx_hashes (list[str]), .summary (str)

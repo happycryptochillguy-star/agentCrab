@@ -85,13 +85,15 @@ class AgentCrab:
     # ------------------------------------------------------------------
 
     def get_balance(self) -> Balance:
-        """Get prepaid balance on agentCrab."""
+        """Get prepaid balance on agentCrab + Polymarket trading balance."""
         resp = self._http.get("/payment/balance")
         d = _extract_data(resp)
         return Balance(
             wallet_address=d.get("wallet_address", self.address),
             remaining_wei=d.get("remaining_wei", "0"),
             calls_remaining=d.get("calls_remaining", 0),
+            safe_address=d.get("safe_address", ""),
+            trading_balance_usdc=d.get("trading_balance_usdc", 0.0),
             total_deposited_wei=d.get("total_deposited_wei", "0"),
             total_consumed_wei=d.get("total_consumed_wei", "0"),
             raw=d,
