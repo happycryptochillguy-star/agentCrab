@@ -20,6 +20,7 @@ async def get_balance(
     wallet_address: str = Depends(verify_auth_only),
 ):
     """Get prepaid balance for a wallet."""
+    await payment_svc.sync_balance(wallet_address)
     deposited, consumed, remaining = await balance_svc.get_remaining(wallet_address)
     calls = balance_svc.calls_remaining(remaining)
 

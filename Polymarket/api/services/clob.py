@@ -40,8 +40,14 @@ async def get_orderbook(token_id: str) -> Orderbook:
     resp.raise_for_status()
     data = resp.json()
 
-    bids = [OrderbookLevel(price=str(b["price"]), size=str(b["size"])) for b in data.get("bids", [])]
-    asks = [OrderbookLevel(price=str(a["price"]), size=str(a["size"])) for a in data.get("asks", [])]
+    bids = sorted(
+        [OrderbookLevel(price=str(b["price"]), size=str(b["size"])) for b in data.get("bids", [])],
+        key=lambda x: float(x.price), reverse=True,
+    )
+    asks = sorted(
+        [OrderbookLevel(price=str(a["price"]), size=str(a["size"])) for a in data.get("asks", [])],
+        key=lambda x: float(x.price),
+    )
 
     best_bid = bids[0].price if bids else None
     best_ask = asks[0].price if asks else None
@@ -77,8 +83,14 @@ async def get_orderbooks_batch(token_ids: list[str]) -> list[Orderbook]:
     orderbooks = []
     for i, data in enumerate(results):
         token_id = token_ids[i] if i < len(token_ids) else data.get("asset_id", "")
-        bids = [OrderbookLevel(price=str(b["price"]), size=str(b["size"])) for b in data.get("bids", [])]
-        asks = [OrderbookLevel(price=str(a["price"]), size=str(a["size"])) for a in data.get("asks", [])]
+        bids = sorted(
+            [OrderbookLevel(price=str(b["price"]), size=str(b["size"])) for b in data.get("bids", [])],
+            key=lambda x: float(x.price), reverse=True,
+        )
+        asks = sorted(
+            [OrderbookLevel(price=str(a["price"]), size=str(a["size"])) for a in data.get("asks", [])],
+            key=lambda x: float(x.price),
+        )
 
         best_bid = bids[0].price if bids else None
         best_ask = asks[0].price if asks else None

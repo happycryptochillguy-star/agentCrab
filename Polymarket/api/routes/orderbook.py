@@ -105,6 +105,15 @@ async def get_price(
             ).model_dump(),
         )
 
+    if not price.midpoint and not price.best_bid and not price.best_ask and not price.last_trade_price:
+        raise HTTPException(
+            status_code=404,
+            detail=ErrorResponse(
+                error_code="NOT_FOUND",
+                message=f"No price data found for token_id '{token_id[:20]}...'. Check that the token_id is valid and the market is active.",
+            ).model_dump(),
+        )
+
     mid = price.midpoint or "N/A"
     summary = (
         f"Price for {token_id[:12]}...: "
