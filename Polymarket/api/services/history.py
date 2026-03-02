@@ -8,6 +8,7 @@ import aiosqlite
 import httpx
 
 from api.config import settings
+from api.services.http_pool import get_proxy_client
 from api.services.categories import CATEGORIES
 
 logger = logging.getLogger("agentcrab.history")
@@ -21,14 +22,6 @@ SYNC_COOLDOWN = 3600  # 1 hour
 # Periodic sync interval (seconds). Full sync on first run, incremental after.
 PERIODIC_SYNC_INTERVAL = 6 * 3600  # 6 hours
 INCREMENTAL_MAX_PAGES = 4  # 4 pages × 500 = 2000 events covers recent closures
-
-
-def _client_kwargs() -> dict:
-    """Build httpx client kwargs with proxy if configured."""
-    kwargs: dict = {"timeout": 30}
-    if settings.polymarket_proxy:
-        kwargs["proxy"] = settings.polymarket_proxy
-    return kwargs
 
 
 def _parse_json_str(val) -> list:
@@ -135,76 +128,76 @@ async def sync_historical_events(max_pages: int = 0) -> int:
     mode = "incremental" if max_pages else "full"
     logger.info(f"Starting {mode} historical events sync (max_pages={max_pages or 'unlimited'})...")
 
-    async with httpx.AsyncClient(**_client_kwargs()) as client:
-        while True:
-            params = {
-                "limit": page_size,
-                "offset": offset,
-                "order": "volume",
-                "ascending": "false",
-                "closed": "true",
-            }
-            try:
-                resp = await client.get(
-                    f"{settings.gamma_api_url}/events", params=params
-                )
-                resp.raise_for_status()
-                raw_events = resp.json()
-            except Exception as e:
-                logger.warning(f"Failed to fetch closed events at offset {offset}: {e}")
-                pages_fetched += 1
-                offset += page_size
-                continue
-
-            if not raw_events:
-                break
-
-            rows: list[tuple] = []
-            for ev in raw_events:
-                event_id = str(ev.get("id", ""))
-                title = ev.get("title", "")
-                tag_slugs = _parse_tags(ev)
-                category = match_category(tag_slugs)
-                resolution = _parse_resolution(ev)
-                volume = _parse_float(ev.get("volume"))
-                market_count = len(ev.get("markets", []))
-
-                rows.append((
-                    event_id,
-                    title,
-                    category,
-                    ev.get("startDate"),
-                    ev.get("endDate"),
-                    ev.get("closedTime") or ev.get("endDate"),
-                    volume,
-                    resolution,
-                    json.dumps(tag_slugs),
-                    market_count,
-                    now,
-                ))
-
-            async with aiosqlite.connect(DB_PATH) as db:
-                await db.executemany(
-                    """INSERT OR REPLACE INTO historical_events
-                       (event_id, title, category, start_date, end_date, closed_time,
-                        volume, resolution, tags, market_count, synced_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    rows,
-                )
-                await db.commit()
-
-            total_synced += len(raw_events)
+    client = get_proxy_client()
+    while True:
+        params = {
+            "limit": page_size,
+            "offset": offset,
+            "order": "volume",
+            "ascending": "false",
+            "closed": "true",
+        }
+        try:
+            resp = await client.get(
+                f"{settings.gamma_api_url}/events", params=params
+            )
+            resp.raise_for_status()
+            raw_events = resp.json()
+        except Exception as e:
+            logger.warning(f"Failed to fetch closed events at offset {offset}: {e}")
             pages_fetched += 1
-            logger.info(f"Synced {total_synced} events so far (page={pages_fetched}, offset={offset})...")
-
-            if len(raw_events) < page_size:
-                break
-
-            if max_pages and pages_fetched >= max_pages:
-                logger.info(f"Incremental sync limit reached ({max_pages} pages).")
-                break
-
             offset += page_size
+            continue
+
+        if not raw_events:
+            break
+
+        rows: list[tuple] = []
+        for ev in raw_events:
+            event_id = str(ev.get("id", ""))
+            title = ev.get("title", "")
+            tag_slugs = _parse_tags(ev)
+            category = match_category(tag_slugs)
+            resolution = _parse_resolution(ev)
+            volume = _parse_float(ev.get("volume"))
+            market_count = len(ev.get("markets", []))
+
+            rows.append((
+                event_id,
+                title,
+                category,
+                ev.get("startDate"),
+                ev.get("endDate"),
+                ev.get("closedTime") or ev.get("endDate"),
+                volume,
+                resolution,
+                json.dumps(tag_slugs),
+                market_count,
+                now,
+            ))
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.executemany(
+                """INSERT OR REPLACE INTO historical_events
+                   (event_id, title, category, start_date, end_date, closed_time,
+                    volume, resolution, tags, market_count, synced_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                rows,
+            )
+            await db.commit()
+
+        total_synced += len(raw_events)
+        pages_fetched += 1
+        logger.info(f"Synced {total_synced} events so far (page={pages_fetched}, offset={offset})...")
+
+        if len(raw_events) < page_size:
+            break
+
+        if max_pages and pages_fetched >= max_pages:
+            logger.info(f"Incremental sync limit reached ({max_pages} pages).")
+            break
+
+        offset += page_size
 
     if total_synced > 0:
         _last_sync_time = time.time()

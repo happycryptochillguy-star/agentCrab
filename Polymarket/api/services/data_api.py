@@ -5,6 +5,7 @@ import logging
 import httpx
 
 from api.config import settings
+from api.services.http_pool import get_proxy_client
 from api.models import Position, Trade, Activity
 
 logger = logging.getLogger("agentcrab.data_api")
@@ -12,13 +13,13 @@ logger = logging.getLogger("agentcrab.data_api")
 
 async def get_positions(wallet_address: str) -> list[Position]:
     """Get positions for a wallet address from the Data API."""
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(
-            f"{settings.data_api_url}/positions",
-            params={"user": wallet_address},
-        )
-        resp.raise_for_status()
-        raw = resp.json()
+    client = get_proxy_client()
+    resp = await client.get(
+        f"{settings.data_api_url}/positions",
+        params={"user": wallet_address},
+    )
+    resp.raise_for_status()
+    raw = resp.json()
 
     positions: list[Position] = []
     for p in raw:
@@ -40,17 +41,17 @@ async def get_positions(wallet_address: str) -> list[Position]:
 
 async def get_trades(wallet_address: str, limit: int = 50, offset: int = 0) -> list[Trade]:
     """Get trade history for a wallet address."""
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(
-            f"{settings.data_api_url}/trades",
-            params={
-                "user": wallet_address,
-                "limit": limit,
-                "offset": offset,
-            },
-        )
-        resp.raise_for_status()
-        raw = resp.json()
+    client = get_proxy_client()
+    resp = await client.get(
+        f"{settings.data_api_url}/trades",
+        params={
+            "user": wallet_address,
+            "limit": limit,
+            "offset": offset,
+        },
+    )
+    resp.raise_for_status()
+    raw = resp.json()
 
     trades: list[Trade] = []
     for t in raw:
@@ -70,17 +71,17 @@ async def get_trades(wallet_address: str, limit: int = 50, offset: int = 0) -> l
 
 async def get_activity(wallet_address: str, limit: int = 50, offset: int = 0) -> list[Activity]:
     """Get on-chain activity for a wallet address."""
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(
-            f"{settings.data_api_url}/activity",
-            params={
-                "user": wallet_address,
-                "limit": limit,
-                "offset": offset,
-            },
-        )
-        resp.raise_for_status()
-        raw = resp.json()
+    client = get_proxy_client()
+    resp = await client.get(
+        f"{settings.data_api_url}/activity",
+        params={
+            "user": wallet_address,
+            "limit": limit,
+            "offset": offset,
+        },
+    )
+    resp.raise_for_status()
+    raw = resp.json()
 
     activities: list[Activity] = []
     for a in raw:

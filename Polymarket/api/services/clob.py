@@ -14,6 +14,7 @@ import httpx
 from eth_utils import to_checksum_address
 
 from api.config import settings
+from api.services.http_pool import get_proxy_client
 from api.services.payment import derive_safe_address
 from api.models import (
     Orderbook,
@@ -31,13 +32,13 @@ logger = logging.getLogger("agentcrab.clob")
 
 async def get_orderbook(token_id: str) -> Orderbook:
     """Get the full orderbook for a token."""
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.get(
-            f"{settings.clob_api_url}/book",
-            params={"token_id": token_id},
-        )
-        resp.raise_for_status()
-        data = resp.json()
+    client = get_proxy_client()
+    resp = await client.get(
+        f"{settings.clob_api_url}/book",
+        params={"token_id": token_id},
+    )
+    resp.raise_for_status()
+    data = resp.json()
 
     bids = [OrderbookLevel(price=str(b["price"]), size=str(b["size"])) for b in data.get("bids", [])]
     asks = [OrderbookLevel(price=str(a["price"]), size=str(a["size"])) for a in data.get("asks", [])]
@@ -65,13 +66,13 @@ async def get_orderbook(token_id: str) -> Orderbook:
 
 async def get_orderbooks_batch(token_ids: list[str]) -> list[Orderbook]:
     """Batch fetch orderbooks for multiple tokens."""
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(
-            f"{settings.clob_api_url}/books",
-            json=[{"token_id": tid} for tid in token_ids],
-        )
-        resp.raise_for_status()
-        results = resp.json()
+    client = get_proxy_client()
+    resp = await client.post(
+        f"{settings.clob_api_url}/books",
+        json=[{"token_id": tid} for tid in token_ids],
+    )
+    resp.raise_for_status()
+    results = resp.json()
 
     orderbooks = []
     for i, data in enumerate(results):
@@ -105,11 +106,11 @@ async def get_orderbooks_batch(token_ids: list[str]) -> list[Orderbook]:
 
 async def get_price(token_id: str) -> PriceSummary:
     """Get price summary for a token (best bid, ask, midpoint, spread, last trade)."""
-    async with httpx.AsyncClient(timeout=15) as client:
-        # Fetch multiple price metrics in parallel
-        price_resp, midpoint_resp, spread_resp, last_trade_resp = await _fetch_price_data(
-            client, token_id
-        )
+    client = get_proxy_client()
+    # Fetch multiple price metrics in parallel
+    price_resp, midpoint_resp, spread_resp, last_trade_resp = await _fetch_price_data(
+        client, token_id
+    )
 
     best_bid = None
     best_ask = None
@@ -172,13 +173,6 @@ ROUNDING_CONFIG = {
 }
 
 
-def _clob_client_kwargs() -> dict:
-    kwargs: dict = {"timeout": 15}
-    if settings.polymarket_proxy:
-        kwargs["proxy"] = settings.polymarket_proxy
-    return kwargs
-
-
 def _build_l2_headers(
     api_key: str,
     secret: str,
@@ -237,14 +231,14 @@ async def place_order(
     headers = _build_l2_headers(api_key, secret, passphrase, poly_address, "POST", "/order", body)
     headers["Content-Type"] = "application/json"
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(
-            f"{settings.clob_api_url}/order",
-            headers=headers,
-            content=body,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+    client = get_proxy_client()
+    resp = await client.post(
+        f"{settings.clob_api_url}/order",
+        headers=headers,
+        content=body,
+    )
+    resp.raise_for_status()
+    data = resp.json()
 
     return OrderResponse(
         order_id=data.get("orderID", data.get("id", "")),
@@ -271,15 +265,15 @@ async def cancel_order(
     headers = _build_l2_headers(api_key, secret, passphrase, poly_address, "DELETE", "/order", body)
     headers["Content-Type"] = "application/json"
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.request(
-            "DELETE",
-            f"{settings.clob_api_url}/order",
-            headers=headers,
-            content=body,
-        )
-        resp.raise_for_status()
-        return resp.json()
+    client = get_proxy_client()
+    resp = await client.request(
+        "DELETE",
+        f"{settings.clob_api_url}/order",
+        headers=headers,
+        content=body,
+    )
+    resp.raise_for_status()
+    return resp.json()
 
 
 async def cancel_all_orders(
@@ -291,14 +285,14 @@ async def cancel_all_orders(
     """Cancel all open orders."""
     headers = _build_l2_headers(api_key, secret, passphrase, poly_address, "DELETE", "/cancel-all")
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.request(
-            "DELETE",
-            f"{settings.clob_api_url}/cancel-all",
-            headers=headers,
-        )
-        resp.raise_for_status()
-        return resp.json()
+    client = get_proxy_client()
+    resp = await client.request(
+        "DELETE",
+        f"{settings.clob_api_url}/cancel-all",
+        headers=headers,
+    )
+    resp.raise_for_status()
+    return resp.json()
 
 
 async def get_open_orders(
@@ -316,14 +310,14 @@ async def get_open_orders(
 
     headers = _build_l2_headers(api_key, secret, passphrase, poly_address, "GET", path)
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(
-            f"{settings.clob_api_url}{path}",
-            headers=headers,
-            params=params,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+    client = get_proxy_client()
+    resp = await client.get(
+        f"{settings.clob_api_url}{path}",
+        headers=headers,
+        params=params,
+    )
+    resp.raise_for_status()
+    data = resp.json()
 
     # CLOB returns paginated {data, next_cursor, limit, count}
     if isinstance(data, dict) and "data" in data:
@@ -350,23 +344,23 @@ async def derive_api_credentials(
         "POLY_NONCE": str(nonce),
     }
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        # Try create first (for wallets that haven't created keys yet)
-        resp = await client.post(
-            f"{settings.clob_api_url}/auth/api-key",
-            headers=headers,
-        )
-        if resp.status_code == 200:
-            return resp.json()
-
-        # Fall back to derive (for wallets that already have keys)
-        logger.info("Create API key returned %s, falling back to derive", resp.status_code)
-        resp = await client.get(
-            f"{settings.clob_api_url}/auth/derive-api-key",
-            headers=headers,
-        )
-        resp.raise_for_status()
+    client = get_proxy_client()
+    # Try create first (for wallets that haven't created keys yet)
+    resp = await client.post(
+        f"{settings.clob_api_url}/auth/api-key",
+        headers=headers,
+    )
+    if resp.status_code == 200:
         return resp.json()
+
+    # Fall back to derive (for wallets that already have keys)
+    logger.info("Create API key returned %s, falling back to derive", resp.status_code)
+    resp = await client.get(
+        f"{settings.clob_api_url}/auth/derive-api-key",
+        headers=headers,
+    )
+    resp.raise_for_status()
+    return resp.json()
 
 
 # === Order Building (prepare-order / submit-order) ===
@@ -391,63 +385,63 @@ def _to_token_decimals(x: float) -> int:
 
 async def get_tick_size(token_id: str) -> str:
     """Get the tick size for a market from CLOB."""
-    async with httpx.AsyncClient(**_clob_client_kwargs()) as client:
-        resp = await client.get(
-            f"{settings.clob_api_url}/tick-size",
-            params={"token_id": token_id},
-        )
-        resp.raise_for_status()
-        data = resp.json()
+    client = get_proxy_client()
+    resp = await client.get(
+        f"{settings.clob_api_url}/tick-size",
+        params={"token_id": token_id},
+    )
+    resp.raise_for_status()
+    data = resp.json()
     return data.get("minimum_tick_size", "0.01")
 
 
 async def get_neg_risk(token_id: str) -> bool:
     """Check if a token belongs to a neg-risk market."""
-    async with httpx.AsyncClient(**_clob_client_kwargs()) as client:
-        resp = await client.get(
-            f"{settings.clob_api_url}/neg-risk",
-            params={"token_id": token_id},
-        )
-        resp.raise_for_status()
-        data = resp.json()
+    client = get_proxy_client()
+    resp = await client.get(
+        f"{settings.clob_api_url}/neg-risk",
+        params={"token_id": token_id},
+    )
+    resp.raise_for_status()
+    data = resp.json()
     return data.get("neg_risk", False)
 
 
 async def get_fee_rate_bps(token_id: str) -> int:
     """Get the fee rate in basis points for a market."""
-    async with httpx.AsyncClient(**_clob_client_kwargs()) as client:
-        resp = await client.get(
-            f"{settings.clob_api_url}/fee-rate",
-            params={"token_id": token_id},
-        )
-        resp.raise_for_status()
-        data = resp.json()
+    client = get_proxy_client()
+    resp = await client.get(
+        f"{settings.clob_api_url}/fee-rate",
+        params={"token_id": token_id},
+    )
+    resp.raise_for_status()
+    data = resp.json()
     return int(float(data.get("base_fee", 0)))
 
 
 async def get_market_context(token_id: str) -> dict:
     """Look up market question and outcome for a token_id via Gamma API."""
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(
-                f"{settings.gamma_api_url}/markets",
-                params={"clob_token_ids": token_id},
-            )
-            if resp.status_code != 200 or not resp.json():
-                return {}
-            m = resp.json()[0]
-            question = m.get("question", "")
-            outcome = ""
-            token_ids_raw = m.get("clobTokenIds", "")
-            outcomes_raw = m.get("outcomes", "")
-            if token_ids_raw and outcomes_raw:
-                ids = [t.strip().strip('"') for t in token_ids_raw.strip("[]").split(",")]
-                outcomes = [o.strip().strip('"') for o in outcomes_raw.strip("[]").split(",")]
-                for i, tid in enumerate(ids):
-                    if tid == token_id and i < len(outcomes):
-                        outcome = outcomes[i]
-                        break
-            return {"question": question, "outcome": outcome}
+        client = get_proxy_client()
+        resp = await client.get(
+            f"{settings.gamma_api_url}/markets",
+            params={"clob_token_ids": token_id},
+        )
+        if resp.status_code != 200 or not resp.json():
+            return {}
+        m = resp.json()[0]
+        question = m.get("question", "")
+        outcome = ""
+        token_ids_raw = m.get("clobTokenIds", "")
+        outcomes_raw = m.get("outcomes", "")
+        if token_ids_raw and outcomes_raw:
+            ids = [t.strip().strip('"') for t in token_ids_raw.strip("[]").split(",")]
+            outcomes = [o.strip().strip('"') for o in outcomes_raw.strip("[]").split(",")]
+            for i, tid in enumerate(ids):
+                if tid == token_id and i < len(outcomes):
+                    outcome = outcomes[i]
+                    break
+        return {"question": question, "outcome": outcome}
     except Exception:
         return {}
 
@@ -600,11 +594,106 @@ async def post_signed_order(
     )
     headers["Content-Type"] = "application/json"
 
-    async with httpx.AsyncClient(**_clob_client_kwargs()) as client:
+    client = get_proxy_client()
+    resp = await client.post(
+        f"{settings.clob_api_url}/order",
+        headers=headers,
+        content=body,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+# === Batch Order Operations ===
+
+
+async def build_batch_order_typed_data(
+    eoa_address: str,
+    orders: list[dict],
+) -> list[dict]:
+    """Build EIP-712 typed data for multiple orders in parallel.
+
+    Each order dict must have: token_id, side, size, price.
+    Returns a list of results (same length as orders). Each element is either
+    the normal build_order_typed_data result or {"error": "..."}.
+    """
+    import asyncio
+
+    async def _build_one(order: dict) -> dict:
+        try:
+            return await build_order_typed_data(
+                eoa_address=eoa_address,
+                token_id=order["token_id"],
+                side=order["side"],
+                size=order["size"],
+                price=order["price"],
+            )
+        except Exception as e:
+            return {"error": str(e), "token_id": order.get("token_id", "")}
+
+    return await asyncio.gather(*[_build_one(o) for o in orders])
+
+
+async def post_signed_orders_batch(
+    signed_orders: list[dict],
+    api_key: str,
+    secret: str,
+    passphrase: str,
+    eoa_address: str,
+) -> list[dict]:
+    """Post multiple signed orders to CLOB.
+
+    Each item in signed_orders: {clob_order, signature, order_type}.
+    Tries CLOB batch endpoint POST /orders first; falls back to parallel
+    individual submissions.
+
+    Returns a list of results (same length as input).
+    """
+    import asyncio
+
+    # Try batch endpoint first
+    try:
+        batch_body = []
+        for item in signed_orders:
+            order = dict(item["clob_order"])
+            order["signature"] = item["signature"]
+            batch_body.append({
+                "order": order,
+                "owner": api_key,
+                "orderType": item.get("order_type", "GTC"),
+            })
+
+        body = _json.dumps(batch_body, separators=(",", ":"), ensure_ascii=False)
+        headers = _build_l2_headers(
+            api_key, secret, passphrase, eoa_address, "POST", "/orders", body,
+        )
+        headers["Content-Type"] = "application/json"
+
+        client = get_proxy_client()
         resp = await client.post(
-            f"{settings.clob_api_url}/order",
+            f"{settings.clob_api_url}/orders",
             headers=headers,
             content=body,
         )
         resp.raise_for_status()
         return resp.json()
+    except Exception as batch_err:
+        logger.info("Batch endpoint failed (%s), falling back to parallel individual", batch_err)
+
+    # Fallback: parallel individual submissions
+    async def _submit_one(item: dict) -> dict:
+        try:
+            order_copy = dict(item["clob_order"])
+            return await post_signed_order(
+                clob_order=order_copy,
+                signature=item["signature"],
+                order_type=item.get("order_type", "GTC"),
+                api_key=api_key,
+                secret=secret,
+                passphrase=passphrase,
+                eoa_address=eoa_address,
+            )
+        except Exception as e:
+            return {"error": str(e), "success": False}
+
+    return await asyncio.gather(*[_submit_one(item) for item in signed_orders])

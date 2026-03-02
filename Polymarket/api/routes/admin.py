@@ -4,6 +4,8 @@ All endpoints require X-Admin-Key header matching the ADMIN_KEY env var.
 These are registered at root level (/admin/*), NOT under /polymarket.
 """
 
+import hmac as _hmac
+
 from fastapi import APIRouter, Depends, Header, HTTPException
 
 from api.config import settings, reload_settings
@@ -25,7 +27,7 @@ async def _verify_admin(
                 message="Admin key not configured on server. Set ADMIN_KEY in .env.",
             ).model_dump(),
         )
-    if x_admin_key != settings.admin_key:
+    if not _hmac.compare_digest(x_admin_key, settings.admin_key):
         raise HTTPException(
             status_code=403,
             detail=ErrorResponse(

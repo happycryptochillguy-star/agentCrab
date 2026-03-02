@@ -115,6 +115,42 @@ async def init_db():
             "CREATE INDEX IF NOT EXISTS idx_tcp_addr_cat ON trader_category_positions(address, category_path)"
         )
 
+        # === Triggers Table (stop loss / take profit) ===
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS triggers (
+                id TEXT PRIMARY KEY,
+                wallet_address TEXT NOT NULL,
+                token_id TEXT NOT NULL,
+                trigger_type TEXT NOT NULL,
+                trigger_price TEXT NOT NULL,
+                exit_side TEXT NOT NULL,
+                clob_order TEXT NOT NULL,
+                signature TEXT NOT NULL,
+                order_type TEXT NOT NULL DEFAULT 'GTC',
+                l2_api_key TEXT NOT NULL,
+                l2_secret TEXT NOT NULL,
+                l2_passphrase TEXT NOT NULL,
+                size TEXT,
+                price TEXT,
+                market_question TEXT,
+                market_outcome TEXT,
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at REAL NOT NULL,
+                triggered_at REAL,
+                submitted_at REAL,
+                result_order_id TEXT,
+                result_status TEXT,
+                result_error TEXT,
+                expires_at REAL
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_triggers_active ON triggers(status, token_id) WHERE status = 'active'"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_triggers_wallet ON triggers(wallet_address, status)"
+        )
+
         await db.commit()
 
 

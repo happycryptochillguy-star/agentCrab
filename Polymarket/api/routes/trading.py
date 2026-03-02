@@ -3,7 +3,7 @@
 import time as _time
 
 import httpx
-from fastapi import APIRouter, Depends, Header, Query, HTTPException
+from fastapi import APIRouter, Depends, Header, Query, HTTPException, Request
 from pydantic import BaseModel
 
 from api.auth import verify_auth_and_payment, verify_auth_only
@@ -12,8 +12,10 @@ from api.models import (
     SuccessResponse, ErrorResponse,
     SubmitDeploySafeRequest, SubmitApprovalsRequest,
     PrepareOrderRequest, SubmitOrderRequest,
+    PrepareBatchOrderRequest, SubmitBatchOrderRequest,
 )
 
+from api.services import balance as balance_svc
 from api.services import clob as clob_svc
 from api.services import payment as payment_svc
 from api.services import relayer as relayer_svc
@@ -206,7 +208,7 @@ async def prepare_enable(
 
     # Check on-chain approval status
     try:
-        approval_status = relayer_svc.check_approval_status(safe_address)
+        approval_status = await relayer_svc.check_approval_status(safe_address)
     except Exception as e:
         # If check fails, fall back to building all approvals
         approval_status = {"all_approved": False, "missing": [], "approved": []}
@@ -507,6 +509,186 @@ async def submit_order(
         data["error"] = result["errorMsg"]
 
     return SuccessResponse(summary=summary, data=data)
+
+
+# === Batch Order Placement ===
+
+
+@router.post("/prepare-batch-order")
+async def prepare_batch_order(
+    req: PrepareBatchOrderRequest,
+    wallet_address: str = Depends(verify_auth_only),
+):
+    """Build EIP-712 typed data for multiple orders at once.
+
+    Agent signs each typed_data individually, then submits all to
+    POST /trading/submit-batch-order.
+    Max 15 orders per batch.
+    """
+    if not req.orders or len(req.orders) > 15:
+        raise HTTPException(
+            status_code=400,
+            detail=ErrorResponse(
+                error_code="INVALID_BATCH_SIZE",
+                message="Batch must contain 1-15 orders.",
+            ).model_dump(),
+        )
+
+    orders_dicts = [
+        {"token_id": o.token_id, "side": o.side, "size": o.size, "price": o.price}
+        for o in req.orders
+    ]
+
+    results = await clob_svc.build_batch_order_typed_data(
+        eoa_address=wallet_address,
+        orders=orders_dicts,
+    )
+
+    prepared = []
+    errors = []
+    total_cost = 0.0
+
+    for i, result in enumerate(results):
+        if "error" in result:
+            errors.append({"index": i, "token_id": req.orders[i].token_id, "error": result["error"]})
+            continue
+
+        market = result.get("market", {})
+        item = {
+            "index": i,
+            "typed_data": result["typed_data"],
+            "clob_order": result["clob_order"],
+            "side": result["side"],
+            "price": result["price"],
+            "size": result["size"],
+            "cost_usdc": result["cost_usdc"],
+        }
+        if market:
+            item["market"] = market
+        prepared.append(item)
+        total_cost += result["cost_usdc"]
+
+    ok_count = len(prepared)
+    err_count = len(errors)
+    summary = f"{ok_count} order(s) ready to sign (${total_cost:.2f} total)."
+    if err_count:
+        summary += f" {err_count} failed to prepare."
+
+    data: dict = {"orders": prepared, "total_cost_usdc": round(total_cost, 6)}
+    if errors:
+        data["errors"] = errors
+
+    return SuccessResponse(summary=summary, data=data)
+
+
+@router.post("/submit-batch-order")
+async def submit_batch_order(
+    req: SubmitBatchOrderRequest,
+    request: Request,
+    wallet_address: str = Depends(verify_auth_only),
+    creds: dict = Depends(_get_poly_creds_no_address),
+):
+    """Submit multiple signed orders to Polymarket CLOB.
+
+    Cost: N x 0.01 USDT (one charge per order in the batch).
+    Uses verify_auth_only + manual variable-amount deduction.
+    """
+    if not req.orders or len(req.orders) > 15:
+        raise HTTPException(
+            status_code=400,
+            detail=ErrorResponse(
+                error_code="INVALID_BATCH_SIZE",
+                message="Batch must contain 1-15 orders.",
+            ).model_dump(),
+        )
+
+    # Manual variable-amount payment
+    n = len(req.orders)
+    total_cost_wei = n * settings.payment_amount_wei
+    remaining = await payment_svc.check_prepaid_balance(wallet_address)
+    if remaining < total_cost_wei:
+        raise HTTPException(
+            status_code=402,
+            detail=ErrorResponse(
+                error_code="INSUFFICIENT_BALANCE",
+                message=(
+                    f"Batch of {n} orders costs {n} x 0.01 = {n * 0.01:.2f} USDT. "
+                    f"Your balance: {remaining} wei ({remaining // settings.payment_amount_wei} calls remaining). "
+                    f"Please deposit more USDT."
+                ),
+            ).model_dump(),
+        )
+
+    consumed = await balance_svc.consume(
+        wallet_address, total_cost_wei, request.url.path,
+    )
+    if not consumed:
+        raise HTTPException(
+            status_code=402,
+            detail=ErrorResponse(
+                error_code="BALANCE_DEDUCTION_FAILED",
+                message="Failed to deduct batch payment. Please try again.",
+            ).model_dump(),
+        )
+    payment_svc.invalidate_balance_cache(wallet_address)
+
+    # Submit orders
+    signed_items = [
+        {
+            "clob_order": o.clob_order,
+            "signature": o.signature,
+            "order_type": o.order_type,
+        }
+        for o in req.orders
+    ]
+
+    try:
+        results = await clob_svc.post_signed_orders_batch(
+            signed_orders=signed_items,
+            api_key=creds["api_key"],
+            secret=creds["secret"],
+            passphrase=creds["passphrase"],
+            eoa_address=wallet_address,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=ErrorResponse(
+                error_code="BATCH_ORDER_ERROR",
+                message=f"Failed to submit batch: {e}",
+            ).model_dump(),
+        )
+
+    # Build response
+    order_results = []
+    success_count = 0
+    for i, r in enumerate(results):
+        if isinstance(r, dict) and r.get("error"):
+            order_results.append({"index": i, "success": False, "error": r["error"]})
+        else:
+            entry: dict = {"index": i, "success": True}
+            if isinstance(r, dict):
+                entry["order_id"] = r.get("orderID", r.get("id", ""))
+                entry["status"] = r.get("status", "unknown")
+                if r.get("takingAmount"):
+                    entry["taking_amount"] = r["takingAmount"]
+                if r.get("makingAmount"):
+                    entry["making_amount"] = r["makingAmount"]
+                tx_hashes = r.get("transactionsHashes", [])
+                if tx_hashes:
+                    entry["tx_hash"] = tx_hashes[0]
+            success_count += 1
+            order_results.append(entry)
+
+    fail_count = n - success_count
+    summary = f"{success_count}/{n} orders submitted successfully."
+    if fail_count:
+        summary += f" {fail_count} failed."
+
+    return SuccessResponse(
+        summary=summary,
+        data={"results": order_results, "total_charged_usdt": round(n * 0.01, 2)},
+    )
 
 
 # === Cancel / Query Orders (L2 auth, server derives EOA) ===

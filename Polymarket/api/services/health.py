@@ -20,9 +20,8 @@ import random
 import time
 from dataclasses import dataclass
 
-import httpx
-
 from api.config import settings
+from api.services.http_pool import get_proxy_client, get_direct_client, get_telegram_client
 
 logger = logging.getLogger("agentcrab.health")
 
@@ -49,115 +48,90 @@ _states: dict[str, ProbeState] = {}
 
 
 # ---------------------------------------------------------------------------
-# HTTP client helpers
-# ---------------------------------------------------------------------------
-
-def _proxy_client_kwargs() -> dict:
-    """For Polymarket-domain APIs (geo-blocked)."""
-    kwargs: dict = {"timeout": 15}
-    if settings.polymarket_proxy:
-        kwargs["proxy"] = settings.polymarket_proxy
-    return kwargs
-
-
-def _direct_client_kwargs() -> dict:
-    """For blockchain RPCs and other non-blocked services."""
-    return {"timeout": 15}
-
-
-def _telegram_client_kwargs() -> dict:
-    """For Telegram API — may need separate proxy in some regions."""
-    kwargs: dict = {"timeout": 10}
-    if settings.telegram_proxy:
-        kwargs["proxy"] = settings.telegram_proxy
-    return kwargs
-
-
-# ---------------------------------------------------------------------------
 # Probe functions — each returns (ok: bool, detail: str)
 # ---------------------------------------------------------------------------
 
 async def _probe_gamma() -> tuple[bool, str]:
-    async with httpx.AsyncClient(**_proxy_client_kwargs()) as c:
-        resp = await c.get(
-            f"{settings.gamma_api_url}/events",
-            params={"limit": 1, "active": "true"},
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        if not data:
-            return False, "Empty response"
-        return True, f"OK ({len(data)} events)"
+    c = get_proxy_client()
+    resp = await c.get(
+        f"{settings.gamma_api_url}/events",
+        params={"limit": 1, "active": "true"},
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    if not data:
+        return False, "Empty response"
+    return True, f"OK ({len(data)} events)"
 
 
 async def _probe_data_api() -> tuple[bool, str]:
-    async with httpx.AsyncClient(**_proxy_client_kwargs()) as c:
-        # /activity is more stable than /leaderboard (which 404s intermittently)
-        resp = await c.get(
-            f"{settings.data_api_url}/activity",
-            params={"limit": 1},
-        )
-        resp.raise_for_status()
-        return True, f"OK (status {resp.status_code})"
+    c = get_proxy_client()
+    # /activity is more stable than /leaderboard (which 404s intermittently)
+    resp = await c.get(
+        f"{settings.data_api_url}/activity",
+        params={"limit": 1},
+    )
+    resp.raise_for_status()
+    return True, f"OK (status {resp.status_code})"
 
 
 async def _probe_clob() -> tuple[bool, str]:
-    async with httpx.AsyncClient(**_proxy_client_kwargs()) as c:
-        resp = await c.get(f"{settings.clob_api_url}/time")
-        resp.raise_for_status()
-        return True, f"OK (server time: {resp.text[:30]})"
+    c = get_proxy_client()
+    resp = await c.get(f"{settings.clob_api_url}/time")
+    resp.raise_for_status()
+    return True, f"OK (server time: {resp.text[:30]})"
 
 
 async def _probe_fun_xyz() -> tuple[bool, str]:
     if not settings.fun_xyz_api_url:
         return True, "Skipped (not configured)"
-    async with httpx.AsyncClient(**_proxy_client_kwargs()) as c:
-        # GET to base URL — any non-5xx means the server is alive
-        resp = await c.get(
-            settings.fun_xyz_api_url,
-            headers={"x-api-key": settings.fun_xyz_api_key} if settings.fun_xyz_api_key else {},
-        )
-        if resp.status_code < 500:
-            return True, f"OK (status {resp.status_code})"
-        return False, f"Server error: {resp.status_code}"
+    c = get_proxy_client()
+    # GET to base URL — any non-5xx means the server is alive
+    resp = await c.get(
+        settings.fun_xyz_api_url,
+        headers={"x-api-key": settings.fun_xyz_api_key} if settings.fun_xyz_api_key else {},
+    )
+    if resp.status_code < 500:
+        return True, f"OK (status {resp.status_code})"
+    return False, f"Server error: {resp.status_code}"
 
 
 async def _probe_relayer() -> tuple[bool, str]:
     if not settings.relayer_url:
         return True, "Skipped (not configured)"
-    async with httpx.AsyncClient(**_proxy_client_kwargs()) as c:
-        resp = await c.get(settings.relayer_url)
-        if resp.status_code < 500:
-            return True, f"OK (status {resp.status_code})"
-        return False, f"Server error: {resp.status_code}"
+    c = get_proxy_client()
+    resp = await c.get(settings.relayer_url)
+    if resp.status_code < 500:
+        return True, f"OK (status {resp.status_code})"
+    return False, f"Server error: {resp.status_code}"
 
 
 async def _probe_bsc_rpc() -> tuple[bool, str]:
-    async with httpx.AsyncClient(**_direct_client_kwargs()) as c:
-        resp = await c.post(
-            settings.bsc_rpc_url,
-            json={"jsonrpc": "2.0", "method": "eth_blockNumber", "params": [], "id": 1},
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        result = data.get("result", "0x0")
-        block = int(result, 16) if isinstance(result, str) else 0
-        return True, f"OK (block {block})"
+    c = get_direct_client()
+    resp = await c.post(
+        settings.bsc_rpc_url,
+        json={"jsonrpc": "2.0", "method": "eth_blockNumber", "params": [], "id": 1},
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    result = data.get("result", "0x0")
+    block = int(result, 16) if isinstance(result, str) else 0
+    return True, f"OK (block {block})"
 
 
 async def _probe_polygon_rpc() -> tuple[bool, str]:
     if not settings.polygon_rpc_url:
         return True, "Skipped (not configured)"
-    async with httpx.AsyncClient(**_direct_client_kwargs()) as c:
-        resp = await c.post(
-            settings.polygon_rpc_url,
-            json={"jsonrpc": "2.0", "method": "eth_blockNumber", "params": [], "id": 1},
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        result = data.get("result", "0x0")
-        block = int(result, 16) if isinstance(result, str) else 0
-        return True, f"OK (block {block})"
+    c = get_direct_client()
+    resp = await c.post(
+        settings.polygon_rpc_url,
+        json={"jsonrpc": "2.0", "method": "eth_blockNumber", "params": [], "id": 1},
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    result = data.get("result", "0x0")
+    block = int(result, 16) if isinstance(result, str) else 0
+    return True, f"OK (block {block})"
 
 
 # Probe registry: (name, label, function)
@@ -185,13 +159,13 @@ async def send_telegram(message: str):
         return
 
     try:
-        async with httpx.AsyncClient(**_telegram_client_kwargs()) as c:
-            resp = await c.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json={"chat_id": chat_id, "text": message},
-            )
-            if resp.status_code != 200:
-                logger.warning(f"Telegram API returned {resp.status_code}: {resp.text[:200]}")
+        c = get_telegram_client()
+        resp = await c.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": message},
+        )
+        if resp.status_code != 200:
+            logger.warning(f"Telegram API returned {resp.status_code}: {resp.text[:200]}")
     except Exception as e:
         logger.warning(f"Failed to send Telegram alert: {e}")
 
@@ -206,10 +180,10 @@ async def send_bark(title: str, body: str, critical: bool = False):
         params: dict = {"title": title, "body": body}
         if critical:
             params["level"] = "critical"  # continuous ringing for critical alerts
-        async with httpx.AsyncClient(**_direct_client_kwargs()) as c:
-            resp = await c.post(f"{bark_url.rstrip('/')}/push", json=params)
-            if resp.status_code != 200:
-                logger.warning(f"Bark API returned {resp.status_code}: {resp.text[:200]}")
+        c = get_direct_client()
+        resp = await c.post(f"{bark_url.rstrip('/')}/push", json=params)
+        if resp.status_code != 200:
+            logger.warning(f"Bark API returned {resp.status_code}: {resp.text[:200]}")
     except Exception as e:
         logger.warning(f"Failed to send Bark alert: {e}")
 

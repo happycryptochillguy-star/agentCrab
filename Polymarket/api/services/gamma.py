@@ -3,21 +3,49 @@
 import asyncio
 import json
 import logging
+import time
+from collections import OrderedDict
 
 import httpx
 
 from api.config import settings
 from api.models import GammaEvent, GammaMarketDetail, Market, MarketOutcome
+from api.services.http_pool import get_proxy_client
 
 logger = logging.getLogger("agentcrab.gamma")
 
 
-def _client_kwargs() -> dict:
-    """Build httpx client kwargs with proxy if configured."""
-    kwargs: dict = {"timeout": 30}
-    if settings.polymarket_proxy:
-        kwargs["proxy"] = settings.polymarket_proxy
-    return kwargs
+# === LRU + TTL cache for search results ===
+
+_search_cache: OrderedDict[str, tuple[float, list]] = OrderedDict()  # key -> (timestamp, results)
+_CACHE_TTL = 60  # seconds
+_CACHE_MAX_ENTRIES = 200
+
+
+def _cache_key(query: str | None, tag: str | None, limit: int, offset: int, closed: bool) -> str:
+    return f"{query}|{tag}|{limit}|{offset}|{closed}"
+
+
+def _cache_get(key: str) -> list | None:
+    """Get from cache if fresh. Returns None if miss or stale."""
+    entry = _search_cache.get(key)
+    if entry is None:
+        return None
+    ts, results = entry
+    if time.time() - ts > _CACHE_TTL:
+        _search_cache.pop(key, None)
+        return None
+    # Move to end (most recently used)
+    _search_cache.move_to_end(key)
+    return results
+
+
+def _cache_put(key: str, results: list):
+    """Store results in cache. Evicts oldest if over max size."""
+    _search_cache[key] = (time.time(), results)
+    _search_cache.move_to_end(key)
+    while len(_search_cache) > _CACHE_MAX_ENTRIES:
+        _search_cache.popitem(last=False)
 
 
 def _parse_float(val) -> float | None:
@@ -105,10 +133,16 @@ async def search_events(
     if tag:
         params["tag_slug"] = tag
 
-    async with httpx.AsyncClient(**_client_kwargs()) as client:
-        resp = await client.get(f"{settings.gamma_api_url}/events", params=params)
-        resp.raise_for_status()
-        raw_events = resp.json()
+    # Check cache first
+    ck = _cache_key(query, tag, limit, offset, closed)
+    cached = _cache_get(ck)
+    if cached is not None:
+        return cached
+
+    client = get_proxy_client()
+    resp = await client.get(f"{settings.gamma_api_url}/events", params=params)
+    resp.raise_for_status()
+    raw_events = resp.json()
 
     events: list[GammaEvent] = []
     for ev in raw_events:
@@ -135,17 +169,18 @@ async def search_events(
         events = [e for e in events if q_lower in e.title.lower()]
         events = events[offset : offset + limit]
 
+    _cache_put(ck, events)
     return events
 
 
 async def get_event_by_id(event_id: str) -> GammaEvent | None:
     """Get a specific event by ID."""
-    async with httpx.AsyncClient(**_client_kwargs()) as client:
-        resp = await client.get(f"{settings.gamma_api_url}/events/{event_id}")
-        if resp.status_code == 404:
-            return None
-        resp.raise_for_status()
-        ev = resp.json()
+    client = get_proxy_client()
+    resp = await client.get(f"{settings.gamma_api_url}/events/{event_id}")
+    if resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    ev = resp.json()
 
     markets = [_parse_market(m) for m in ev.get("markets", [])]
     return GammaEvent(
@@ -165,12 +200,12 @@ async def get_event_by_id(event_id: str) -> GammaEvent | None:
 
 async def get_event_by_slug(slug: str) -> GammaEvent | None:
     """Get a specific event by slug."""
-    async with httpx.AsyncClient(**_client_kwargs()) as client:
-        resp = await client.get(f"{settings.gamma_api_url}/events/slug/{slug}")
-        if resp.status_code == 404:
-            return None
-        resp.raise_for_status()
-        ev = resp.json()
+    client = get_proxy_client()
+    resp = await client.get(f"{settings.gamma_api_url}/events/slug/{slug}")
+    if resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    ev = resp.json()
 
     markets = [_parse_market(m) for m in ev.get("markets", [])]
     return GammaEvent(
@@ -190,12 +225,12 @@ async def get_event_by_slug(slug: str) -> GammaEvent | None:
 
 async def get_market_by_id(market_id: str) -> GammaMarketDetail | None:
     """Get a specific market by ID."""
-    async with httpx.AsyncClient(**_client_kwargs()) as client:
-        resp = await client.get(f"{settings.gamma_api_url}/markets/{market_id}")
-        if resp.status_code == 404:
-            return None
-        resp.raise_for_status()
-        mkt = resp.json()
+    client = get_proxy_client()
+    resp = await client.get(f"{settings.gamma_api_url}/markets/{market_id}")
+    if resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    mkt = resp.json()
 
     outcomes_list = _parse_json_str(mkt.get("outcomes", ""))
     prices_list = _parse_json_str(mkt.get("outcomePrices", ""))
@@ -275,10 +310,10 @@ async def _fetch_events_raw(
         "active": str(active).lower(),
         "closed": str(closed).lower(),
     }
-    async with httpx.AsyncClient(**_client_kwargs()) as client:
-        resp = await client.get(f"{settings.gamma_api_url}/events", params=params)
-        resp.raise_for_status()
-        raw_events = resp.json()
+    client = get_proxy_client()
+    resp = await client.get(f"{settings.gamma_api_url}/events", params=params)
+    resp.raise_for_status()
+    raw_events = resp.json()
 
     events: list[GammaEvent] = []
     for ev in raw_events:
@@ -358,10 +393,10 @@ async def _mood_interesting(limit: int, offset: int) -> list[GammaEvent]:
 
 async def get_tags() -> list[dict]:
     """Get all available Polymarket tags."""
-    async with httpx.AsyncClient(**_client_kwargs()) as client:
-        resp = await client.get(f"{settings.gamma_api_url}/tags")
-        resp.raise_for_status()
-        return resp.json()
+    client = get_proxy_client()
+    resp = await client.get(f"{settings.gamma_api_url}/tags")
+    resp.raise_for_status()
+    return resp.json()
 
 
 async def browse_by_tags(

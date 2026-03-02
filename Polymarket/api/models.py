@@ -311,3 +311,54 @@ class CategoryStatsResponse(BaseModel):
     best_trader_address: str | None = None
     best_trader_pnl: float | None = None
     worst_trader_pnl: float | None = None
+
+
+# === Batch Order Models ===
+
+class BatchOrderItem(BaseModel):
+    token_id: str
+    side: str  # BUY or SELL
+    size: float
+    price: float
+    order_type: str = "GTC"
+
+
+class PrepareBatchOrderRequest(BaseModel):
+    orders: list[BatchOrderItem]  # 1-15 orders
+
+
+class SubmitBatchOrderItem(BaseModel):
+    signature: str  # EIP-712 Order signature (0x-prefixed hex)
+    clob_order: dict  # The clob_order object from prepare-batch-order
+    order_type: str = "GTC"
+
+
+class SubmitBatchOrderRequest(BaseModel):
+    orders: list[SubmitBatchOrderItem]  # 1-15 orders
+
+
+# === Trigger Models ===
+
+class PrepareTriggerRequest(BaseModel):
+    token_id: str
+    trigger_type: str  # stop_loss or take_profit
+    trigger_price: float
+    exit_side: str  # BUY or SELL
+    size: float
+    exit_price: float
+    expires_in_hours: float | None = None  # Optional TTL
+
+
+class CreateTriggerRequest(BaseModel):
+    signature: str  # EIP-712 Order signature
+    clob_order: dict
+    order_type: str = "GTC"
+    token_id: str
+    trigger_type: str  # stop_loss or take_profit
+    trigger_price: float
+    exit_side: str
+    size: float | None = None
+    exit_price: float | None = None
+    market_question: str | None = None
+    market_outcome: str | None = None
+    expires_in_hours: float | None = None

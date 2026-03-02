@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -99,7 +100,12 @@ def is_valid_address(address: str) -> bool:
 
 
 def verify_signature(wallet_address: str, message: str, signature: str) -> bool:
-    """Verify EIP-191 personal_sign. Message format: 'agentcrab:{unix_timestamp}'."""
+    """Verify EIP-191 personal_sign. Message format: 'agentcrab:{unix_timestamp}'.
+
+    NOTE: This is intentionally synchronous — eth_account.recover_message is CPU-only
+    (no network I/O), so it's fast enough to call inline. The w3.eth.account object
+    is only used for its recover_message method, not for RPC calls.
+    """
     try:
         if not is_valid_address(wallet_address):
             return False
@@ -112,7 +118,7 @@ def verify_signature(wallet_address: str, message: str, signature: str) -> bool:
         if abs(time.time() - ts) > settings.signature_max_age_seconds:
             return False
 
-        # Recover signer
+        # Recover signer (CPU-only, no RPC)
         w3 = get_w3()
         msg = encode_defunct(text=message)
         recovered = w3.eth.account.recover_message(msg, signature=signature)
@@ -120,6 +126,22 @@ def verify_signature(wallet_address: str, message: str, signature: str) -> bool:
     except Exception as e:
         logger.warning("Signature verification failed: %s", e)
         return False
+
+
+def _verify_direct_payment_sync(tx_hash: str, wallet_address: str) -> bool | None:
+    """Sync part of direct payment verification (RPC calls). Returns True/False/None.
+    None means 'need async follow-up' (mark tx used)."""
+    w3 = get_w3()
+    receipt = w3.eth.get_transaction_receipt(tx_hash)
+    if receipt is None or receipt["status"] != 1:
+        return False
+
+    contract = get_contract()
+    logs = contract.events.DirectPayment().process_receipt(receipt)
+    for log in logs:
+        if log["args"]["user"].lower() == wallet_address.lower():
+            return True
+    return False
 
 
 async def verify_direct_payment(tx_hash: str, wallet_address: str) -> bool:
@@ -130,21 +152,24 @@ async def verify_direct_payment(tx_hash: str, wallet_address: str) -> bool:
             logger.warning("Rejected replayed tx hash: %s", tx_hash)
             return False
 
-        w3 = get_w3()
-        receipt = w3.eth.get_transaction_receipt(tx_hash)
-        if receipt is None or receipt["status"] != 1:
-            return False
-
-        contract = get_contract()
-        logs = contract.events.DirectPayment().process_receipt(receipt)
-        for log in logs:
-            if log["args"]["user"].lower() == wallet_address.lower():
-                await balance_svc.mark_tx_used(tx_hash, wallet_address)
-                return True
+        result = await asyncio.to_thread(
+            _verify_direct_payment_sync, tx_hash, wallet_address
+        )
+        if result is True:
+            await balance_svc.mark_tx_used(tx_hash, wallet_address)
+            return True
         return False
     except Exception as e:
         logger.warning("Direct payment verification failed: %s", e)
         return False
+
+
+def _get_on_chain_balance(wallet_address: str) -> int:
+    """Sync RPC call to get on-chain balance."""
+    contract = get_contract()
+    return contract.functions.getBalance(
+        Web3.to_checksum_address(wallet_address)
+    ).call()
 
 
 async def sync_balance(wallet_address: str):
@@ -155,10 +180,7 @@ async def sync_balance(wallet_address: str):
     call (no eth_getLogs) so it works with any RPC provider.
     """
     try:
-        contract = get_contract()
-        on_chain = contract.functions.getBalance(
-            Web3.to_checksum_address(wallet_address)
-        ).call()
+        on_chain = await asyncio.to_thread(_get_on_chain_balance, wallet_address)
         local_deposited, _, _ = await balance_svc.get_remaining(wallet_address)
 
         if on_chain > local_deposited:
@@ -172,16 +194,34 @@ async def sync_balance(wallet_address: str):
         logger.warning("Balance sync failed for %s: %s", wallet_address[:10], e)
 
 
-async def check_prepaid_balance(wallet_address: str) -> int:
-    """Get remaining prepaid balance, syncing from chain first.
+# === Balance Cache (avoid BSC RPC on every paid request) ===
 
-    On each call, reads getBalance(wallet) from the BSC contract and
-    compares with the local DB. If on-chain is higher (new deposit),
-    credits the difference. No background scanner needed.
+_balance_cache: dict[str, tuple[int, float]] = {}  # addr -> (remaining_wei, timestamp)
+_BALANCE_CACHE_TTL = 30  # seconds
+
+
+async def check_prepaid_balance(wallet_address: str) -> int:
+    """Get remaining prepaid balance, with 30s cache to reduce BSC RPC calls.
+
+    Cache is invalidated on consume() (deduction) to ensure correctness.
+    On-chain sync only happens when cache is stale.
     """
+    addr = wallet_address.lower()
+    now = time.time()
+
+    cached = _balance_cache.get(addr)
+    if cached and (now - cached[1]) < _BALANCE_CACHE_TTL:
+        return cached[0]
+
     await sync_balance(wallet_address)
     _, _, remaining = await balance_svc.get_remaining(wallet_address)
+    _balance_cache[addr] = (remaining, now)
     return remaining
+
+
+def invalidate_balance_cache(wallet_address: str):
+    """Invalidate cached balance after a deduction."""
+    _balance_cache.pop(wallet_address.lower(), None)
 
 
 # === Transaction Builder (server-side) ===
@@ -379,12 +419,22 @@ def derive_safe_address(eoa_address: str) -> str:
     return Web3.to_checksum_address(addr_bytes)
 
 
-def get_polygon_usdc_balance(address: str) -> int:
-    """Get USDC.e balance on Polygon for an address. Returns raw wei (6 decimals)."""
+def _get_polygon_usdc_balance_sync(address: str) -> int:
+    """Get USDC.e balance on Polygon (sync RPC call)."""
     w3 = get_polygon_w3()
     usdc_addr = Web3.to_checksum_address(settings.polygon_usdc_address)
     usdc = w3.eth.contract(address=usdc_addr, abi=USDT_ABI)  # same ERC20 ABI
     return usdc.functions.balanceOf(Web3.to_checksum_address(address)).call()
+
+
+def get_polygon_usdc_balance(address: str) -> int:
+    """Get USDC.e balance on Polygon (sync). Use get_polygon_usdc_balance_async for non-blocking."""
+    return _get_polygon_usdc_balance_sync(address)
+
+
+async def get_polygon_usdc_balance_async(address: str) -> int:
+    """Get USDC.e balance on Polygon without blocking the event loop."""
+    return await asyncio.to_thread(_get_polygon_usdc_balance_sync, address)
 
 
 def build_polygon_usdc_transfer_tx(
@@ -417,8 +467,10 @@ def build_polygon_usdc_transfer_tx(
     }]
 
 
-def broadcast_signed_tx(signed_raw_tx: str, chain: str = "bsc") -> str:
-    """Broadcast a signed transaction. Returns the tx hash hex."""
+def _broadcast_signed_tx_sync(signed_raw_tx: str, chain: str = "bsc") -> str:
+    """Broadcast a signed transaction (sync). Returns the tx hash hex.
+    WARNING: Blocks up to 60s waiting for receipt. Always call via to_thread.
+    """
     w3 = get_polygon_w3() if chain == "polygon" else get_w3()
     tx_hash = w3.eth.send_raw_transaction(bytes.fromhex(
         signed_raw_tx.removeprefix("0x")
@@ -429,16 +481,14 @@ def broadcast_signed_tx(signed_raw_tx: str, chain: str = "bsc") -> str:
     return tx_hash.hex()
 
 
-def broadcast_signed_txs(signed_raw_txs: list[str], chain: str = "bsc") -> list[str]:
-    """Broadcast multiple signed transactions in order. Returns list of tx hashes.
-
-    Broadcasts sequentially — each tx is confirmed before sending the next.
-    Stops on first failure and raises with details of which step failed.
+def _broadcast_signed_txs_sync(signed_raw_txs: list[str], chain: str = "bsc") -> list[str]:
+    """Broadcast multiple signed transactions in order (sync).
+    WARNING: Blocks. Always call via to_thread.
     """
     hashes = []
     for i, raw_tx in enumerate(signed_raw_txs):
         try:
-            tx_hash = broadcast_signed_tx(raw_tx, chain=chain)
+            tx_hash = _broadcast_signed_tx_sync(raw_tx, chain=chain)
             hashes.append(tx_hash)
             logger.info("Batch tx %d/%d confirmed: %s", i + 1, len(signed_raw_txs), tx_hash)
         except Exception as e:
@@ -447,3 +497,43 @@ def broadcast_signed_txs(signed_raw_txs: list[str], chain: str = "bsc") -> list[
                 f"Completed: {hashes}"
             )
     return hashes
+
+
+async def broadcast_signed_tx(signed_raw_tx: str, chain: str = "bsc") -> str:
+    """Broadcast a signed transaction without blocking the event loop."""
+    return await asyncio.to_thread(_broadcast_signed_tx_sync, signed_raw_tx, chain)
+
+
+async def broadcast_signed_txs(signed_raw_txs: list[str], chain: str = "bsc") -> list[str]:
+    """Broadcast multiple signed transactions without blocking the event loop."""
+    return await asyncio.to_thread(_broadcast_signed_txs_sync, signed_raw_txs, chain)
+
+
+# === Async wrappers for tx builders (they make sync RPC calls) ===
+
+
+async def build_deposit_txs_async(wallet_address: str, amount_wei: int) -> list[dict]:
+    """Non-blocking wrapper for build_deposit_txs."""
+    return await asyncio.to_thread(build_deposit_txs, wallet_address, amount_wei)
+
+
+async def build_pay_tx_async(wallet_address: str) -> list[dict]:
+    """Non-blocking wrapper for build_pay_tx."""
+    return await asyncio.to_thread(build_pay_tx, wallet_address)
+
+
+async def build_usdt_transfer_tx_async(wallet_address: str, to_address: str, amount_wei: int) -> list[dict]:
+    """Non-blocking wrapper for build_usdt_transfer_tx."""
+    return await asyncio.to_thread(build_usdt_transfer_tx, wallet_address, to_address, amount_wei)
+
+
+async def build_polygon_approval_txs_async(wallet_address: str) -> list[dict]:
+    """Non-blocking wrapper for build_polygon_approval_txs."""
+    return await asyncio.to_thread(build_polygon_approval_txs, wallet_address)
+
+
+async def build_polygon_usdc_transfer_tx_async(
+    wallet_address: str, to_address: str, amount_wei: int,
+) -> list[dict]:
+    """Non-blocking wrapper for build_polygon_usdc_transfer_tx."""
+    return await asyncio.to_thread(build_polygon_usdc_transfer_tx, wallet_address, to_address, amount_wei)

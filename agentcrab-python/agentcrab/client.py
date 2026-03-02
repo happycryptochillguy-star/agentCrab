@@ -1,0 +1,708 @@
+"""Main AgentCrab client — all public methods."""
+
+from __future__ import annotations
+
+from eth_account import Account
+
+from ._exceptions import SetupRequired
+from ._http import HttpTransport, _extract_data
+from ._signer import sign_safe_tx_hash, sign_transaction, sign_typed_data
+from ._types import (
+    Balance,
+    BatchOrderResult,
+    DepositResult,
+    Market,
+    Orderbook,
+    OrderResult,
+    Position,
+    Price,
+    SetupResult,
+    Trade,
+    Trigger,
+    TriggerResult,
+)
+
+
+class AgentCrab:
+    """agentCrab SDK client — turn any Python script into a Polymarket assistant.
+
+    Usage::
+
+        from agentcrab import AgentCrab
+
+        client = AgentCrab("https://api.agentcrab.ai/polymarket", "0xPRIVATE_KEY")
+        markets = client.search("bitcoin")
+        result = client.buy(token_id, size=5.0, price=0.65)
+    """
+
+    def __init__(
+        self,
+        api_url: str,
+        private_key: str,
+        payment_mode: str = "prepaid",
+        timeout: float = 60.0,
+    ):
+        self._private_key = private_key
+        self._account = Account.from_key(private_key)
+        self.address: str = self._account.address
+        self._l2_creds: dict | None = None
+        self._http = HttpTransport(
+            base_url=api_url,
+            private_key=private_key,
+            address=self.address,
+            payment_mode=payment_mode,
+            timeout=timeout,
+        )
+
+    def close(self) -> None:
+        """Close the underlying HTTP client."""
+        self._http.close()
+
+    def __enter__(self) -> AgentCrab:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    # ------------------------------------------------------------------
+    # Wallet (static)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def create_wallet(api_url: str) -> dict:
+        """Create a new wallet via the server (no private key needed).
+
+        Returns ``{"address": "0x...", "private_key": "0x..."}``.
+        """
+        import httpx
+
+        resp = httpx.post(f"{api_url.rstrip('/')}/agent/create-wallet", timeout=30)
+        resp.raise_for_status()
+        return _extract_data(resp.json())
+
+    # ------------------------------------------------------------------
+    # Balance & Payment
+    # ------------------------------------------------------------------
+
+    def get_balance(self) -> Balance:
+        """Get prepaid balance on agentCrab."""
+        resp = self._http.get("/payment/balance")
+        d = _extract_data(resp)
+        return Balance(
+            wallet_address=d.get("wallet_address", self.address),
+            remaining_wei=d.get("remaining_wei", "0"),
+            calls_remaining=d.get("calls_remaining", 0),
+            total_deposited_wei=d.get("total_deposited_wei", "0"),
+            total_consumed_wei=d.get("total_consumed_wei", "0"),
+            raw=d,
+        )
+
+    def deposit(self, amount_usdt: float) -> DepositResult:
+        """Deposit USDT to agentCrab prepaid balance on BSC.
+
+        Full flow: prepare-deposit -> sign txs -> submit-tx.
+        """
+        # 1. Prepare
+        prep = self._http.post("/payment/prepare-deposit", json={"amount_usdt": amount_usdt})
+        data = _extract_data(prep)
+
+        # 2. Sign all transactions
+        txs = data.get("transactions", [])
+        signed = [sign_transaction(self._private_key, t["transaction"]) for t in txs]
+
+        # 3. Submit
+        submit = self._http.post(
+            "/payment/submit-tx",
+            json={"signed_txs": signed, "chain": "bsc"},
+        )
+        submit_data = _extract_data(submit)
+        tx_hashes = submit_data if isinstance(submit_data, list) else submit_data.get("tx_hashes", [])
+
+        return DepositResult(
+            tx_hashes=tx_hashes if isinstance(tx_hashes, list) else [],
+            summary=submit.get("summary", f"Deposited {amount_usdt} USDT"),
+            raw=submit_data if isinstance(submit_data, dict) else {"results": submit_data},
+        )
+
+    def deposit_to_polymarket(self, amount_usdt: float) -> DepositResult:
+        """Deposit USDT from BSC to Polymarket trading balance.
+
+        Full flow: prepare-transfer -> sign txs -> submit-tx.
+        """
+        # 1. Prepare
+        prep = self._http.post("/deposit/prepare-transfer", json={"amount_usdt": amount_usdt}, paid=True)
+        data = _extract_data(prep)
+
+        # 2. Sign all transactions
+        txs = data.get("transactions", [])
+        signed = [sign_transaction(self._private_key, t["transaction"]) for t in txs]
+
+        # 3. Submit
+        submit = self._http.post(
+            "/payment/submit-tx",
+            json={"signed_txs": signed, "chain": "bsc"},
+        )
+        submit_data = _extract_data(submit)
+        tx_hashes = submit_data if isinstance(submit_data, list) else submit_data.get("tx_hashes", [])
+
+        return DepositResult(
+            tx_hashes=tx_hashes if isinstance(tx_hashes, list) else [],
+            summary=submit.get("summary", f"Deposited {amount_usdt} USDT to Polymarket"),
+            raw=submit_data if isinstance(submit_data, dict) else {"results": submit_data},
+        )
+
+    # ------------------------------------------------------------------
+    # Market Data
+    # ------------------------------------------------------------------
+
+    def search(
+        self,
+        query: str,
+        tag: str | None = None,
+        category: str | None = None,
+        limit: int = 10,
+        offset: int = 0,
+        closed: bool = False,
+    ) -> list[Market]:
+        """Search Polymarket events."""
+        params: dict = {"query": query, "limit": limit, "offset": offset, "closed": closed}
+        if tag:
+            params["tag"] = tag
+        if category:
+            params["category"] = category
+
+        resp = self._http.get("/markets/search", params=params, paid=True)
+        data = _extract_data(resp)
+        events = data if isinstance(data, list) else data.get("events", [])
+        return [_parse_market(e) for e in events]
+
+    def browse(
+        self,
+        category: str | None = None,
+        mood: str | None = None,
+        limit: int = 10,
+        offset: int = 0,
+        closed: bool = False,
+    ) -> list[Market]:
+        """Browse Polymarket events by category or mood."""
+        params: dict = {"limit": limit, "offset": offset, "closed": closed}
+        if category:
+            params["category"] = category
+        if mood:
+            params["mood"] = mood
+
+        resp = self._http.get("/markets/browse", params=params, paid=True)
+        data = _extract_data(resp)
+        events = data if isinstance(data, list) else data.get("events", [])
+        return [_parse_market(e) for e in events]
+
+    def get_event(self, event_id: str) -> Market:
+        """Get a single event by ID."""
+        resp = self._http.get(f"/markets/events/{event_id}", paid=True)
+        d = _extract_data(resp)
+        return _parse_market(d)
+
+    def get_market(self, market_id: str) -> dict:
+        """Get a single market by ID (raw dict)."""
+        resp = self._http.get(f"/markets/{market_id}", paid=True)
+        return _extract_data(resp)
+
+    def get_orderbook(self, token_id: str) -> Orderbook:
+        """Get orderbook for a token."""
+        resp = self._http.get(f"/orderbook/{token_id}", paid=True)
+        d = _extract_data(resp)
+        return Orderbook(
+            token_id=d.get("token_id", token_id),
+            bids=d.get("bids", []),
+            asks=d.get("asks", []),
+            best_bid=d.get("best_bid"),
+            best_ask=d.get("best_ask"),
+            spread=d.get("spread"),
+            midpoint=d.get("midpoint"),
+            raw=d,
+        )
+
+    def get_price(self, token_id: str) -> Price:
+        """Get price summary for a token."""
+        resp = self._http.get(f"/prices/{token_id}", paid=True)
+        d = _extract_data(resp)
+        return Price(
+            token_id=d.get("token_id", token_id),
+            best_bid=d.get("best_bid"),
+            best_ask=d.get("best_ask"),
+            midpoint=d.get("midpoint"),
+            spread=d.get("spread"),
+            last_trade_price=d.get("last_trade_price"),
+            raw=d,
+        )
+
+    # ------------------------------------------------------------------
+    # Positions
+    # ------------------------------------------------------------------
+
+    def get_positions(self) -> list[Position]:
+        """Get your Polymarket positions (server derives Safe from EOA)."""
+        resp = self._http.get("/positions", paid=True)
+        data = _extract_data(resp)
+        items = data if isinstance(data, list) else data.get("positions", [])
+        return [
+            Position(
+                token_id=p.get("token_id", ""),
+                outcome=p.get("outcome", ""),
+                size=p.get("size", "0"),
+                question=p.get("question"),
+                market_slug=p.get("market_slug"),
+                avg_price=p.get("avg_price"),
+                current_price=p.get("current_price"),
+                pnl=p.get("pnl"),
+                pnl_percent=p.get("pnl_percent"),
+                raw=p,
+            )
+            for p in items
+        ]
+
+    def get_trades(self, limit: int = 20, offset: int = 0) -> list[Trade]:
+        """Get your recent trades."""
+        resp = self._http.get("/positions/trades", params={"limit": limit, "offset": offset}, paid=True)
+        data = _extract_data(resp)
+        items = data if isinstance(data, list) else data.get("trades", [])
+        return [
+            Trade(
+                side=t.get("side", ""),
+                size=t.get("size", "0"),
+                price=t.get("price", "0"),
+                trade_id=t.get("trade_id"),
+                market_slug=t.get("market_slug"),
+                outcome=t.get("outcome"),
+                timestamp=t.get("timestamp"),
+                raw=t,
+            )
+            for t in items
+        ]
+
+    # ------------------------------------------------------------------
+    # Leaderboard
+    # ------------------------------------------------------------------
+
+    def get_leaderboard(self, limit: int = 20, offset: int = 0) -> list[dict]:
+        """Get Polymarket leaderboard."""
+        resp = self._http.get("/traders/leaderboard", params={"limit": limit, "offset": offset}, paid=True)
+        data = _extract_data(resp)
+        return data if isinstance(data, list) else data.get("leaderboard", [])
+
+    # ------------------------------------------------------------------
+    # Trading Setup
+    # ------------------------------------------------------------------
+
+    def set_credentials(self, api_key: str, secret: str, passphrase: str) -> None:
+        """Manually set L2 trading credentials (if you already have them)."""
+        self._l2_creds = {
+            "api_key": api_key,
+            "secret": secret,
+            "passphrase": passphrase,
+        }
+
+    def setup_trading(self) -> SetupResult:
+        """One-call trading setup: Safe deploy + approvals + L2 credentials.
+
+        Idempotent — skips steps already completed.
+        """
+        steps: list[str] = []
+
+        # Step 1: Deploy Safe (if needed)
+        prep_safe = self._http.post("/trading/prepare-deploy-safe")
+        safe_data = _extract_data(prep_safe)
+        safe_address = safe_data.get("safe_address", "")
+
+        if not safe_data.get("already_deployed"):
+            typed_data = safe_data["typed_data"]
+            sig = sign_typed_data(self._private_key, typed_data)
+            self._http.post(
+                "/trading/submit-deploy-safe",
+                json={"signature": sig},
+                paid=True,
+            )
+            steps.append("safe_deployed")
+        else:
+            steps.append("safe_already_deployed")
+
+        # Step 2: Prepare enable (approvals + CLOB auth)
+        prep_enable = self._http.post("/trading/prepare-enable")
+        enable_data = _extract_data(prep_enable)
+
+        # Step 3: Submit approvals (if needed)
+        if enable_data.get("approvals_needed") and enable_data.get("approval_data"):
+            approval_data = enable_data["approval_data"]
+            safe_tx_hash = approval_data["hash"]
+            sig = sign_safe_tx_hash(self._private_key, safe_tx_hash)
+            self._http.post(
+                "/trading/submit-approvals",
+                json={"signature": sig, "approval_data": approval_data},
+                paid=True,
+            )
+            steps.append("approvals_submitted")
+        else:
+            steps.append("approvals_already_set")
+
+        # Step 4: Derive L2 credentials
+        clob_typed_data = enable_data["clob_typed_data"]
+        timestamp = clob_typed_data["message"]["timestamp"]
+        sig = sign_typed_data(self._private_key, clob_typed_data)
+        creds_resp = self._http.post(
+            "/trading/submit-credentials",
+            json={"signature": sig, "timestamp": timestamp},
+            paid=True,
+        )
+        creds_data = _extract_data(creds_resp)
+
+        api_key = creds_data["api_key"]
+        secret = creds_data["secret"]
+        passphrase = creds_data["passphrase"]
+
+        # Store for future trading calls
+        self._l2_creds = {
+            "api_key": api_key,
+            "secret": secret,
+            "passphrase": passphrase,
+        }
+        steps.append("credentials_derived")
+
+        return SetupResult(
+            safe_address=safe_address,
+            api_key=api_key,
+            secret=secret,
+            passphrase=passphrase,
+            steps_completed=steps,
+            raw=creds_data,
+        )
+
+    # ------------------------------------------------------------------
+    # Trading
+    # ------------------------------------------------------------------
+
+    def _require_l2(self) -> dict:
+        if not self._l2_creds:
+            raise SetupRequired()
+        return self._l2_creds
+
+    def buy(
+        self,
+        token_id: str,
+        size: float,
+        price: float,
+        order_type: str = "GTC",
+    ) -> OrderResult:
+        """Buy shares on Polymarket.
+
+        Full flow: prepare-order -> sign EIP-712 -> submit-order.
+        """
+        return self._place_order(token_id, "BUY", size, price, order_type)
+
+    def sell(
+        self,
+        token_id: str,
+        size: float,
+        price: float,
+        order_type: str = "GTC",
+    ) -> OrderResult:
+        """Sell shares on Polymarket.
+
+        Full flow: prepare-order -> sign EIP-712 -> submit-order.
+        """
+        return self._place_order(token_id, "SELL", size, price, order_type)
+
+    def _place_order(
+        self,
+        token_id: str,
+        side: str,
+        size: float,
+        price: float,
+        order_type: str,
+    ) -> OrderResult:
+        creds = self._require_l2()
+
+        # 1. Prepare order (free, auth only)
+        prep = self._http.post(
+            "/trading/prepare-order",
+            json={
+                "token_id": token_id,
+                "side": side,
+                "size": size,
+                "price": price,
+                "order_type": order_type,
+            },
+        )
+        data = _extract_data(prep)
+
+        # 2. Sign EIP-712 typed data
+        typed_data = data["typed_data"]
+        sig = sign_typed_data(self._private_key, typed_data)
+
+        # 3. Submit order (paid, needs L2 creds)
+        submit = self._http.post(
+            "/trading/submit-order",
+            json={
+                "signature": sig,
+                "clob_order": data["clob_order"],
+                "order_type": order_type,
+            },
+            paid=True,
+            l2_creds=creds,
+        )
+        d = _extract_data(submit)
+
+        return OrderResult(
+            order_id=d.get("order_id", ""),
+            status=d.get("status", "unknown"),
+            success=d.get("success", False),
+            taking_amount=d.get("taking_amount"),
+            making_amount=d.get("making_amount"),
+            tx_hash=d.get("tx_hash"),
+            polygonscan_url=d.get("polygonscan_url"),
+            error=d.get("error"),
+            raw=d,
+        )
+
+    def cancel_order(self, order_id: str) -> dict:
+        """Cancel a single open order."""
+        creds = self._require_l2()
+        resp = self._http.delete(f"/trading/order/{order_id}", paid=True, l2_creds=creds)
+        return _extract_data(resp)
+
+    def cancel_all_orders(self) -> dict:
+        """Cancel all open orders."""
+        creds = self._require_l2()
+        resp = self._http.delete("/trading/orders", paid=True, l2_creds=creds)
+        return _extract_data(resp)
+
+    def get_open_orders(self, market: str | None = None) -> list[dict]:
+        """Get your open orders on Polymarket."""
+        creds = self._require_l2()
+        params = {"market": market} if market else None
+        resp = self._http.get("/trading/orders", params=params, paid=True, l2_creds=creds)
+        data = _extract_data(resp)
+        return data if isinstance(data, list) else []
+
+    def batch_order(self, orders: list[dict]) -> BatchOrderResult:
+        """Place multiple orders at once.
+
+        Each order dict: {token_id, side, size, price, order_type?}.
+        Full flow: prepare-batch-order -> sign all -> submit-batch-order.
+        """
+        creds = self._require_l2()
+
+        # 1. Prepare batch
+        prep = self._http.post(
+            "/trading/prepare-batch-order",
+            json={"orders": orders},
+        )
+        data = _extract_data(prep)
+
+        # 2. Sign each prepared order
+        prepared_orders = data.get("orders", [])
+        signed_items = []
+        for item in prepared_orders:
+            typed_data = item["typed_data"]
+            sig = sign_typed_data(self._private_key, typed_data)
+            signed_items.append({
+                "signature": sig,
+                "clob_order": item["clob_order"],
+                "order_type": orders[item["index"]].get("order_type", "GTC") if item.get("index") is not None else "GTC",
+            })
+
+        if not signed_items:
+            return BatchOrderResult(
+                results=[],
+                success_count=0,
+                fail_count=len(orders),
+                raw=data,
+            )
+
+        # 3. Submit batch
+        submit = self._http.post(
+            "/trading/submit-batch-order",
+            json={"orders": signed_items},
+            paid=True,
+            l2_creds=creds,
+        )
+        d = _extract_data(submit)
+
+        results = d.get("results", [])
+        success_count = sum(1 for r in results if r.get("success"))
+        fail_count = len(results) - success_count
+
+        return BatchOrderResult(
+            results=results,
+            total_charged_usdt=d.get("total_charged_usdt", 0.0),
+            success_count=success_count,
+            fail_count=fail_count,
+            raw=d,
+        )
+
+    # ------------------------------------------------------------------
+    # Triggers (Stop Loss / Take Profit)
+    # ------------------------------------------------------------------
+
+    def _create_trigger(
+        self,
+        token_id: str,
+        trigger_type: str,
+        trigger_price: float,
+        exit_side: str,
+        size: float,
+        exit_price: float,
+        expires_in_hours: float | None = None,
+    ) -> TriggerResult:
+        """Internal: prepare + sign + create a trigger."""
+        creds = self._require_l2()
+
+        # 1. Prepare trigger order
+        prep = self._http.post(
+            "/trading/triggers/prepare",
+            json={
+                "token_id": token_id,
+                "trigger_type": trigger_type,
+                "trigger_price": trigger_price,
+                "exit_side": exit_side,
+                "size": size,
+                "exit_price": exit_price,
+                "expires_in_hours": expires_in_hours,
+            },
+        )
+        data = _extract_data(prep)
+
+        # 2. Sign EIP-712 typed data
+        typed_data = data["typed_data"]
+        sig = sign_typed_data(self._private_key, typed_data)
+
+        # 3. Create trigger
+        create = self._http.post(
+            "/trading/triggers/create",
+            json={
+                "signature": sig,
+                "clob_order": data["clob_order"],
+                "order_type": data.get("order_type", "GTC"),
+                "token_id": token_id,
+                "trigger_type": trigger_type,
+                "trigger_price": trigger_price,
+                "exit_side": exit_side,
+                "size": size,
+                "exit_price": exit_price,
+                "market_question": data.get("market", {}).get("question"),
+                "market_outcome": data.get("market", {}).get("outcome"),
+                "expires_in_hours": expires_in_hours,
+            },
+            paid=True,
+            l2_creds=creds,
+        )
+        d = _extract_data(create)
+        return TriggerResult(
+            trigger_id=d.get("trigger_id", ""),
+            status=d.get("status", "active"),
+            token_id=token_id,
+            trigger_type=trigger_type,
+            trigger_price=str(trigger_price),
+            exit_side=exit_side,
+            raw=d,
+        )
+
+    def set_stop_loss(
+        self,
+        token_id: str,
+        trigger_price: float,
+        size: float,
+        exit_price: float,
+        exit_side: str = "SELL",
+        expires_in_hours: float | None = None,
+    ) -> TriggerResult:
+        """Set a stop loss trigger. When price hits trigger_price, sells at exit_price."""
+        return self._create_trigger(
+            token_id, "stop_loss", trigger_price, exit_side, size, exit_price, expires_in_hours,
+        )
+
+    def set_take_profit(
+        self,
+        token_id: str,
+        trigger_price: float,
+        size: float,
+        exit_price: float,
+        exit_side: str = "SELL",
+        expires_in_hours: float | None = None,
+    ) -> TriggerResult:
+        """Set a take profit trigger. When price hits trigger_price, sells at exit_price."""
+        return self._create_trigger(
+            token_id, "take_profit", trigger_price, exit_side, size, exit_price, expires_in_hours,
+        )
+
+    def get_triggers(self, status: str | None = None) -> list[Trigger]:
+        """Get your triggers (optionally filtered by status)."""
+        params = {"status": status} if status else None
+        resp = self._http.get("/trading/triggers", params=params)
+        data = _extract_data(resp)
+        items = data if isinstance(data, list) else data.get("triggers", [])
+        return [
+            Trigger(
+                trigger_id=t.get("id", ""),
+                token_id=t.get("token_id", ""),
+                trigger_type=t.get("trigger_type", ""),
+                trigger_price=t.get("trigger_price", ""),
+                exit_side=t.get("exit_side", ""),
+                status=t.get("status", ""),
+                size=t.get("size"),
+                price=t.get("price"),
+                market_question=t.get("market_question"),
+                market_outcome=t.get("market_outcome"),
+                created_at=t.get("created_at"),
+                triggered_at=t.get("triggered_at"),
+                expires_at=t.get("expires_at"),
+                result_order_id=t.get("result_order_id"),
+                result_status=t.get("result_status"),
+                result_error=t.get("result_error"),
+                raw=t,
+            )
+            for t in items
+        ]
+
+    def cancel_trigger(self, trigger_id: str) -> dict:
+        """Cancel a single trigger."""
+        resp = self._http.delete(f"/trading/triggers/{trigger_id}")
+        return _extract_data(resp)
+
+    def cancel_all_triggers(self, token_id: str | None = None) -> dict:
+        """Cancel all triggers (optionally filtered by token_id)."""
+        params = {"token_id": token_id} if token_id else None
+        resp = self._http.delete("/trading/triggers", params=params)
+        return _extract_data(resp)
+
+
+# ------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------
+
+
+def _parse_market(d: dict) -> Market:
+    """Parse a server event/market dict into a Market dataclass."""
+    outcomes = d.get("markets", d.get("outcomes", []))
+    # Flatten nested market outcomes
+    if outcomes and isinstance(outcomes, list) and isinstance(outcomes[0], dict) and "outcomes" in outcomes[0]:
+        flat: list[dict] = []
+        for m in outcomes:
+            q = m.get("question", "")
+            for o in m.get("outcomes", []):
+                entry = dict(o) if isinstance(o, dict) else {"outcome": str(o)}
+                if q:
+                    entry["market_question"] = q
+                flat.append(entry)
+        outcomes = flat
+
+    return Market(
+        event_id=d.get("event_id", d.get("id", "")),
+        title=d.get("title", d.get("question", "")),
+        outcomes=outcomes,
+        slug=d.get("slug", d.get("market_slug")),
+        volume=d.get("volume"),
+        end_date=d.get("end_date"),
+        tags=d.get("tags"),
+        image=d.get("image"),
+        raw=d,
+    )

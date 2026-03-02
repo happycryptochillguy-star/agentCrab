@@ -16,14 +16,15 @@ import hmac as hmac_mod
 import json
 import logging
 import time
+from functools import partial
 
-import httpx
 from eth_abi import encode as abi_encode
 from eth_abi.packed import encode_packed
 from eth_utils import to_checksum_address
 from web3 import Web3
 
 from api.config import settings
+from api.services.http_pool import get_proxy_client
 from api.services.payment import derive_safe_address, SAFE_PROXY_FACTORY
 
 logger = logging.getLogger("agentcrab.relayer")
@@ -80,18 +81,11 @@ def _builder_headers(method: str, path: str, body: str = None) -> dict:
 # ── Relayer HTTP Client ──
 
 
-def _client_kwargs() -> dict:
-    kwargs: dict = {"timeout": 30}
-    if settings.polymarket_proxy:
-        kwargs["proxy"] = settings.polymarket_proxy
-    return kwargs
-
-
 async def _relayer_get(path: str, params: dict = None) -> dict:
     """GET request to relayer (public endpoints, no auth)."""
     url = f"{settings.relayer_url}{path}"
-    async with httpx.AsyncClient(**_client_kwargs()) as client:
-        resp = await client.get(url, params=params)
+    client = get_proxy_client()
+    resp = await client.get(url, params=params)
     resp.raise_for_status()
     return resp.json()
 
@@ -102,8 +96,8 @@ async def _relayer_post(path: str, body: dict) -> dict:
     headers = _builder_headers("POST", path, body_str)
     headers["Content-Type"] = "application/json"
     url = f"{settings.relayer_url}{path}"
-    async with httpx.AsyncClient(**_client_kwargs()) as client:
-        resp = await client.post(url, content=body_str, headers=headers)
+    client = get_proxy_client()
+    resp = await client.post(url, content=body_str, headers=headers)
     resp.raise_for_status()
     return resp.json()
 
@@ -236,11 +230,12 @@ def _encode_set_approval_for_all(operator: str) -> bytes:
     )
 
 
-def check_approval_status(safe_address: str) -> dict:
-    """Check which token approvals are already set on-chain for a Safe.
+def _check_approval_status_sync(safe_address: str) -> dict:
+    """Check which token approvals are already set on-chain for a Safe (sync).
 
     Queries Polygon for USDC.e allowance() and CTF isApprovedForAll().
     Returns {"all_approved": bool, "missing": [...], "approved": [...]}.
+    WARNING: Makes 7 sync RPC calls. Always call via check_approval_status (async).
     """
     from api.services.payment import get_polygon_w3
 
@@ -295,6 +290,11 @@ def check_approval_status(safe_address: str) -> dict:
         "approved": approved,
         "missing": missing,
     }
+
+
+async def check_approval_status(safe_address: str) -> dict:
+    """Check approval status without blocking the event loop."""
+    return await asyncio.to_thread(_check_approval_status_sync, safe_address)
 
 
 def _build_approval_calls(only_missing: list[str] | None = None) -> list[dict]:

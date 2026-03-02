@@ -5,28 +5,21 @@ import logging
 import httpx
 
 from api.config import settings
+from api.services.http_pool import get_proxy_client
 from api.models import LeaderboardEntry, Position, Trade
 
 logger = logging.getLogger("agentcrab.leaderboard")
 
 
-def _client_kwargs() -> dict:
-    """Build httpx client kwargs with proxy if configured."""
-    kwargs: dict = {"timeout": 30}
-    if settings.polymarket_proxy:
-        kwargs["proxy"] = settings.polymarket_proxy
-    return kwargs
-
-
 async def get_leaderboard(limit: int = 20, offset: int = 0) -> list[LeaderboardEntry]:
     """Get top traders leaderboard."""
-    async with httpx.AsyncClient(**_client_kwargs()) as client:
-        resp = await client.get(
-            f"{settings.data_api_url}/leaderboard",
-            params={"limit": limit, "offset": offset},
-        )
-        resp.raise_for_status()
-        raw = resp.json()
+    client = get_proxy_client()
+    resp = await client.get(
+        f"{settings.data_api_url}/leaderboard",
+        params={"limit": limit, "offset": offset},
+    )
+    resp.raise_for_status()
+    raw = resp.json()
 
     entries: list[LeaderboardEntry] = []
     for i, r in enumerate(raw):
@@ -46,13 +39,13 @@ async def get_leaderboard(limit: int = 20, offset: int = 0) -> list[LeaderboardE
 
 async def get_trader_positions(address: str) -> list[Position]:
     """Get positions for any trader by wallet address."""
-    async with httpx.AsyncClient(**_client_kwargs()) as client:
-        resp = await client.get(
-            f"{settings.data_api_url}/positions",
-            params={"user": address},
-        )
-        resp.raise_for_status()
-        raw = resp.json()
+    client = get_proxy_client()
+    resp = await client.get(
+        f"{settings.data_api_url}/positions",
+        params={"user": address},
+    )
+    resp.raise_for_status()
+    raw = resp.json()
 
     positions: list[Position] = []
     for p in raw:
@@ -74,13 +67,13 @@ async def get_trader_positions(address: str) -> list[Position]:
 
 async def get_trader_trades(address: str, limit: int = 50, offset: int = 0) -> list[Trade]:
     """Get trade history for any trader."""
-    async with httpx.AsyncClient(**_client_kwargs()) as client:
-        resp = await client.get(
-            f"{settings.data_api_url}/trades",
-            params={"user": address, "limit": limit, "offset": offset},
-        )
-        resp.raise_for_status()
-        raw = resp.json()
+    client = get_proxy_client()
+    resp = await client.get(
+        f"{settings.data_api_url}/trades",
+        params={"user": address, "limit": limit, "offset": offset},
+    )
+    resp.raise_for_status()
+    raw = resp.json()
 
     trades: list[Trade] = []
     for t in raw:

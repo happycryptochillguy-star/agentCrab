@@ -1,5 +1,7 @@
 """Deposit and withdrawal endpoints — Polymarket native bridge."""
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from web3 import Web3
@@ -147,43 +149,47 @@ async def prepare_transfer(
         )
 
     # 4. Extract pre-built transactions, add nonces
+    #    (web3 calls run in thread to avoid blocking event loop)
     steps = quote["metadata"]["relayQuote"]["steps"]
-    w3 = payment_svc.get_w3()
-    nonce = w3.eth.get_transaction_count(w3.to_checksum_address(wallet_address))
 
-    transactions = []
-    for step in steps:
-        raw_tx = step["items"][0]["data"]
-        tx = {
-            "from": Web3.to_checksum_address(raw_tx["from"]),
-            "to": Web3.to_checksum_address(raw_tx["to"]),
-            "data": raw_tx["data"],
-            "value": int(raw_tx.get("value", "0")),
-            "chainId": raw_tx["chainId"],
-            "nonce": nonce,
-        }
-        # Gas: use API value if provided, otherwise estimate on-chain
-        if raw_tx.get("gas") is not None:
-            tx["gas"] = int(raw_tx["gas"])
-        else:
-            try:
-                tx["gas"] = w3.eth.estimate_gas({
-                    "from": tx["from"],
-                    "to": tx["to"],
-                    "data": raw_tx["data"],
-                    "value": tx["value"],
-                })
-            except Exception:
-                tx["gas"] = 200_000  # safe fallback for depositErc20
-        if "maxFeePerGas" in raw_tx:
-            tx["maxFeePerGas"] = int(raw_tx["maxFeePerGas"])
-            tx["maxPriorityFeePerGas"] = int(raw_tx["maxPriorityFeePerGas"])
-        transactions.append({
-            "step": step["id"],
-            "description": step["description"],
-            "transaction": tx,
-        })
-        nonce += 1
+    def _build_txs_sync():
+        w3 = payment_svc.get_w3()
+        _nonce = w3.eth.get_transaction_count(w3.to_checksum_address(wallet_address))
+        _txs = []
+        for step in steps:
+            raw_tx = step["items"][0]["data"]
+            tx = {
+                "from": Web3.to_checksum_address(raw_tx["from"]),
+                "to": Web3.to_checksum_address(raw_tx["to"]),
+                "data": raw_tx["data"],
+                "value": int(raw_tx.get("value", "0")),
+                "chainId": raw_tx["chainId"],
+                "nonce": _nonce,
+            }
+            if raw_tx.get("gas") is not None:
+                tx["gas"] = int(raw_tx["gas"])
+            else:
+                try:
+                    tx["gas"] = w3.eth.estimate_gas({
+                        "from": tx["from"],
+                        "to": tx["to"],
+                        "data": raw_tx["data"],
+                        "value": tx["value"],
+                    })
+                except Exception:
+                    tx["gas"] = 200_000
+            if "maxFeePerGas" in raw_tx:
+                tx["maxFeePerGas"] = int(raw_tx["maxFeePerGas"])
+                tx["maxPriorityFeePerGas"] = int(raw_tx["maxPriorityFeePerGas"])
+            _txs.append({
+                "step": step["id"],
+                "description": step["description"],
+                "transaction": tx,
+            })
+            _nonce += 1
+        return _txs
+
+    transactions = await asyncio.to_thread(_build_txs_sync)
 
     est_total = quote.get("estTotalFromAmount", "?")
     est_fees = quote.get("estFeesUsd", 0)

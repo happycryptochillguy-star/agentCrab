@@ -82,7 +82,7 @@ async def prepare_deposit(
     calls = int(req.amount_usdt / 0.01)
 
     try:
-        txs = payment_svc.build_deposit_txs(wallet_address, amount_wei)
+        txs = await payment_svc.build_deposit_txs_async(wallet_address, amount_wei)
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -117,7 +117,7 @@ async def prepare_pay(
     Free endpoint (auth only, no payment).
     """
     try:
-        txs = payment_svc.build_pay_tx(wallet_address)
+        txs = await payment_svc.build_pay_tx_async(wallet_address)
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -171,7 +171,7 @@ async def submit_tx(
     # Batch mode
     if req.signed_txs:
         try:
-            hashes = payment_svc.broadcast_signed_txs(req.signed_txs, chain=req.chain)
+            hashes = await payment_svc.broadcast_signed_txs(req.signed_txs, chain=req.chain)
         except RuntimeError as e:
             raise HTTPException(
                 status_code=400,
@@ -196,7 +196,7 @@ async def submit_tx(
 
     # Single tx mode (backward compatible)
     try:
-        tx_hash = payment_svc.broadcast_signed_tx(req.signed_tx, chain=req.chain)
+        tx_hash = await payment_svc.broadcast_signed_tx(req.signed_tx, chain=req.chain)
     except RuntimeError as e:
         raise HTTPException(
             status_code=400,

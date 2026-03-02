@@ -66,6 +66,8 @@ async def verify_auth_and_payment(
         consumed = await balance_svc.consume(
             x_wallet_address, settings.payment_amount_wei, endpoint
         )
+        if consumed:
+            payment_svc.invalidate_balance_cache(x_wallet_address)
         if not consumed:
             raise HTTPException(
                 status_code=402,
