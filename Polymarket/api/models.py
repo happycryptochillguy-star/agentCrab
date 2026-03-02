@@ -26,6 +26,7 @@ class MarketOutcome(BaseModel):
 class Market(BaseModel):
     question: str
     market_slug: str | None = None
+    condition_id: str | None = None
     outcomes: list[MarketOutcome]
     volume: float | None = None
     liquidity: float | None = None

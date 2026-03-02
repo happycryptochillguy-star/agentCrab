@@ -236,6 +236,65 @@ class AgentCrab:
             raw=d,
         )
 
+    def find_tradeable(
+        self,
+        query: str | None = None,
+        category: str | None = None,
+        mood: str = "trending",
+        price_range: tuple[float, float] = (0.10, 0.90),
+        limit: int = 10,
+    ) -> tuple[Market, dict, Orderbook]:
+        """Find a liquid, tradeable market with one call.
+
+        Searches/browses markets, finds the highest-volume outcome with an
+        active orderbook in the given price range.
+
+        Returns ``(market, outcome, orderbook)`` where outcome is the dict
+        from ``market.outcomes`` (has ``token_id``, ``price``, etc.).
+
+        Raises ``AgentCrabError`` if no tradeable market is found.
+        """
+        from ._exceptions import AgentCrabError
+
+        # Search or browse
+        if query:
+            markets = self.search(query, category=category, limit=limit)
+        else:
+            markets = self.browse(category=category, mood=mood, limit=limit)
+
+        lo, hi = price_range
+        best: tuple[Market, dict, Orderbook] | None = None
+        best_vol = -1.0
+
+        for m in markets:
+            vol = m.volume or 0.0
+            for o in m.outcomes:
+                if not isinstance(o, dict) or not o.get("token_id"):
+                    continue
+                p = o.get("price")
+                if p is None:
+                    continue
+                try:
+                    pf = float(p)
+                except (ValueError, TypeError):
+                    continue
+                if not (lo <= pf <= hi):
+                    continue
+                if vol <= best_vol:
+                    continue
+                # Verify orderbook has liquidity
+                try:
+                    ob = self.get_orderbook(o["token_id"])
+                    if ob.best_bid and ob.best_ask:
+                        best = (m, o, ob)
+                        best_vol = vol
+                except Exception:
+                    continue
+
+        if best is None:
+            raise AgentCrabError("No tradeable market found matching criteria.", error_code="NOT_FOUND")
+        return best
+
     # ------------------------------------------------------------------
     # Positions
     # ------------------------------------------------------------------
@@ -684,43 +743,58 @@ def _parse_market(d: dict) -> Market:
     """Parse a server event/market dict into a Market dataclass.
 
     Server formats:
-    - Slim (search/browse): {candidates: [{name, chance, token_id}, ...]}
-    - Full (events/markets): {markets: [{question, outcomes, outcomePrices, clobTokenIds}, ...]}
+    - Slim (search/browse): {candidates: [{name, chance, price, token_id, condition_id}, ...]}
+    - Full (events/markets): {markets: [{question, condition_id, outcomes, ...}, ...]}
     """
+    condition_id = d.get("condition_id")
+
     # Try "candidates" first (slim server response)
     candidates = d.get("candidates")
     if candidates and isinstance(candidates, list):
         outcomes = [
             {
                 "outcome": c.get("name", ""),
-                "price": _chance_to_float(c.get("chance")),
+                "price": c.get("price") if c.get("price") is not None else _chance_to_float(c.get("chance")),
                 "token_id": c.get("token_id"),
+                "condition_id": c.get("condition_id"),
             }
             for c in candidates
         ]
     else:
-        # Fallback: full Gamma-style response
-        outcomes = d.get("markets", d.get("outcomes", []))
-        if outcomes and isinstance(outcomes, list) and isinstance(outcomes[0], dict) and "outcomes" in outcomes[0]:
-            flat: list[dict] = []
-            for m in outcomes:
+        # Fallback: full Gamma-style response with nested markets
+        raw_markets = d.get("markets", d.get("outcomes", []))
+        if raw_markets and isinstance(raw_markets, list) and isinstance(raw_markets[0], dict) and "outcomes" in raw_markets[0]:
+            outcomes: list[dict] = []
+            for m in raw_markets:
                 q = m.get("question", "")
+                m_cid = m.get("condition_id")
                 for o in m.get("outcomes", []):
                     entry = dict(o) if isinstance(o, dict) else {"outcome": str(o)}
+                    if "price" not in entry and "chance" in entry:
+                        entry["price"] = _chance_to_float(entry.pop("chance"))
+                    if "name" in entry and "outcome" not in entry:
+                        entry["outcome"] = entry.pop("name")
                     if q:
                         entry["market_question"] = q
-                    flat.append(entry)
-            outcomes = flat
+                    if m_cid:
+                        entry["condition_id"] = m_cid
+                    outcomes.append(entry)
+        else:
+            outcomes = raw_markets
+
+    # Parse volume: handle both numeric and formatted string ("$738,665,116")
+    volume = _parse_volume(d.get("volume"))
 
     return Market(
         event_id=d.get("event_id", d.get("id", "")),
         title=d.get("title", d.get("question", "")),
         outcomes=outcomes,
         slug=d.get("slug", d.get("market_slug")),
-        volume=d.get("volume"),
+        volume=volume,
         end_date=d.get("end_date"),
         tags=d.get("tags"),
         image=d.get("image"),
+        condition_id=condition_id,
         raw=d,
     )
 
@@ -734,5 +808,18 @@ def _chance_to_float(chance) -> float | None:
     s = str(chance).strip().rstrip("%")
     try:
         return float(s) / 100.0
+    except (ValueError, TypeError):
+        return None
+
+
+def _parse_volume(v) -> float | None:
+    """Parse volume: handles numeric, '$738,665,116', or None."""
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = str(v).replace("$", "").replace(",", "").strip()
+    try:
+        return float(s)
     except (ValueError, TypeError):
         return None

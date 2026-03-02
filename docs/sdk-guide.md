@@ -24,11 +24,25 @@ Use `token_id` for: `get_orderbook()`, `get_price()`, `buy()`, `sell()`, `set_st
 ```python
 markets = client.search("bitcoin")
 # markets[0].title = "Bitcoin above $200k by June?"
+# markets[0].volume = 738665116.0   ← numeric, easy to compare/sort
 # markets[0].outcomes = [
-#   {"outcome": "Yes", "price": 0.65, "token_id": "71321..."},
-#   {"outcome": "No",  "price": 0.35, "token_id": "81922..."}
+#   {"outcome": "Yes", "price": 0.65, "token_id": "71321...", "condition_id": "0xabc..."},
+#   {"outcome": "No",  "price": 0.35, "token_id": "81922...", "condition_id": "0xabc..."}
 # ]
 token_id = markets[0].outcomes[0]["token_id"]  # pick the outcome you want
+```
+
+## Quick Start: Find & Trade
+
+```python
+# find_tradeable() does the heavy lifting — finds a liquid market in one call
+market, outcome, orderbook = client.find_tradeable("bitcoin")
+# market.title = "Bitcoin above $200k?"
+# outcome = {"outcome": "Yes", "price": 0.65, "token_id": "71321..."}
+# orderbook.best_bid = "0.64", orderbook.best_ask = "0.66"
+
+client.setup_trading()
+result = client.buy(outcome["token_id"], size=5.0, price=float(orderbook.best_ask))
 ```
 
 ## Typical Flow
@@ -89,8 +103,21 @@ client.get_event("event_id") → Market
 client.get_market("market_id") → dict
 
 # Market fields:
-#   .event_id, .title, .slug, .volume, .end_date, .tags, .image
-#   .outcomes = [{"outcome": "Yes", "price": 0.65, "token_id": "..."}, ...]
+#   .event_id, .title, .slug, .volume (float), .end_date, .tags, .image
+#   .condition_id (str, for use with get_market)
+#   .outcomes = [{"outcome": "Yes", "price": 0.65, "token_id": "...", "condition_id": "..."}, ...]
+```
+
+### Find Tradeable Market (convenience)
+
+```python
+market, outcome, orderbook = client.find_tradeable("bitcoin")
+market, outcome, orderbook = client.find_tradeable(mood="trending")
+market, outcome, orderbook = client.find_tradeable("nba", category="sports", price_range=(0.2, 0.8))
+# Searches markets, picks the highest-volume outcome with an active orderbook.
+# Returns (Market, outcome_dict, Orderbook) ready for trading.
+# Raises AgentCrabError if no tradeable market found.
+# Cost: 1 search/browse call + 1 orderbook call per candidate checked.
 ```
 
 ### Orderbook & Price (0.01 USDT each)

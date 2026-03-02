@@ -19,8 +19,6 @@ def _simplify_event(ev: GammaEvent) -> dict:
     For multi-candidate events (30 binary Yes/No markets), flatten to a single
     candidates list sorted by probability. This cuts 55KB → ~2KB.
     """
-    vol_str = f"${ev.volume:,.0f}" if ev.volume else None
-
     # Detect multi-candidate events: many markets, each with exactly 2 outcomes (Yes/No)
     is_multi_candidate = (
         len(ev.markets) >= 5
@@ -50,12 +48,16 @@ def _simplify_event(ev: GammaEvent) -> dict:
                 if idx > 0:
                     name = name[:idx]
                     break
-            candidates.append({
+            entry: dict = {
                 "name": name,
                 "chance": f"{yes_out.price:.1%}" if yes_out.price is not None else None,
+                "price": yes_out.price,
                 "token_id": yes_out.token_id,
                 "_sort": yes_out.price or 0,
-            })
+            }
+            if m.condition_id:
+                entry["condition_id"] = m.condition_id
+            candidates.append(entry)
         # Sort by probability descending, keep top 15
         candidates.sort(key=lambda c: c["_sort"], reverse=True)
         total_candidates = len(candidates)
@@ -67,7 +69,7 @@ def _simplify_event(ev: GammaEvent) -> dict:
             "total_candidates": total_candidates,
             "event_id": ev.event_id,
             "title": ev.title,
-            "volume": vol_str,
+            "volume": ev.volume,
             "candidates": candidates,
         }
         if ev.end_date:
@@ -77,22 +79,24 @@ def _simplify_event(ev: GammaEvent) -> dict:
     # Standard event: list markets with outcomes
     markets = []
     for m in ev.markets:
+        mkt: dict = {"question": m.question}
+        if m.condition_id:
+            mkt["condition_id"] = m.condition_id
         outcomes = []
         for o in m.outcomes:
-            entry: dict = {"name": o.outcome}
+            entry = {"name": o.outcome}
             if o.price is not None:
                 entry["chance"] = f"{o.price:.1%}"
+                entry["price"] = o.price
             if o.token_id:
                 entry["token_id"] = o.token_id
             outcomes.append(entry)
-        markets.append({
-            "question": m.question,
-            "outcomes": outcomes,
-        })
+        mkt["outcomes"] = outcomes
+        markets.append(mkt)
     result = {
         "event_id": ev.event_id,
         "title": ev.title,
-        "volume": vol_str,
+        "volume": ev.volume,
         "markets": markets,
     }
     if ev.end_date:
@@ -104,17 +108,19 @@ def _simplify_market_detail(mkt: GammaMarketDetail) -> dict:
     """Simplify a GammaMarketDetail for agent consumption."""
     outcomes = []
     for o in mkt.outcomes:
-        entry = {"name": o.outcome}
+        entry: dict = {"name": o.outcome}
         if o.price is not None:
             entry["chance"] = f"{o.price:.1%}"
+            entry["price"] = o.price
         if o.token_id:
             entry["token_id"] = o.token_id
         outcomes.append(entry)
     result: dict = {
         "market_id": mkt.market_id,
+        "condition_id": mkt.condition_id,
         "question": mkt.question,
         "outcomes": outcomes,
-        "volume": f"${mkt.volume:,.0f}" if mkt.volume else None,
+        "volume": mkt.volume,
         "active": mkt.active,
     }
     if mkt.description:

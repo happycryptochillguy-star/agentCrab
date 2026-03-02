@@ -82,6 +82,7 @@ def _parse_market(mkt: dict) -> Market:
     return Market(
         question=mkt.get("question", ""),
         market_slug=mkt.get("slug"),
+        condition_id=mkt.get("conditionId"),
         outcomes=outcomes,
         volume=_parse_float(mkt.get("volume")),
         liquidity=_parse_float(mkt.get("liquidity")),

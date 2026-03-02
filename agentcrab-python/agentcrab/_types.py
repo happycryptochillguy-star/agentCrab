@@ -28,6 +28,7 @@ class Market:
     end_date: str | None = None
     tags: list[str] | None = None
     image: str | None = None
+    condition_id: str | None = None
     raw: dict = field(default_factory=dict, repr=False)
 
 
