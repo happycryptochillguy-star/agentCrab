@@ -33,5 +33,7 @@ dist/
 # SQLite
 *.db
 
-# Test scripts (not part of package)
-test_comprehensive.py
+# Test scripts (never commit — may contain keys)
+test_*.py
+*_test.py
+tests/
