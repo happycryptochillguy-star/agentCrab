@@ -1,4 +1,4 @@
-"""Health probe service — periodic checks on all external dependencies + Telegram alerts.
+"""Health probe service — periodic checks on all external dependencies.
 
 Probes 7 external services every 15 minutes:
   - Gamma API (markets)
@@ -9,9 +9,9 @@ Probes 7 external services every 15 minutes:
   - BSC RPC
   - Polygon RPC
 
-On state change (ok→fail after 2 consecutive failures): sends Telegram DOWN alert.
-On recovery (fail→ok): sends Telegram RECOVERY alert.
-Re-alerts every 2h if still down.
+Notification policy:
+  - Telegram: every probe round (startup + periodic status reports)
+  - Bark: only on errors (DOWN alert, re-alert every 2h)
 """
 
 import asyncio
@@ -237,20 +237,16 @@ async def run_all_probes() -> dict[str, dict]:
             state.consecutive_successes += 1
             state.last_error = None
 
-            # Recovery alert
+            # Recovery — Telegram only (no Bark)
             if prev_status == "fail" and state.alerted_at:
                 downtime = now - state.alerted_at
                 mins = int(downtime / 60)
-                await _notify(
-                    message=(
-                        f"[RECOVERED] agentCrab\n\n"
-                        f"Service: {label}\n"
-                        f"Status: UP (recovered)\n"
-                        f"Downtime: ~{mins} min\n"
-                        f"Detail: {detail}"
-                    ),
-                    bark_title="agentCrab Recovered",
-                    bark_body=f"{label} is back UP (~{mins}min downtime)",
+                await send_telegram(
+                    f"[RECOVERED] agentCrab\n\n"
+                    f"Service: {label}\n"
+                    f"Status: UP (recovered)\n"
+                    f"Downtime: ~{mins} min\n"
+                    f"Detail: {detail}"
                 )
                 state.alerted_at = None
 
@@ -321,28 +317,29 @@ def get_all_states() -> dict[str, dict]:
     return result
 
 
+def _build_report(results: dict[str, dict], header: str = "Health check") -> str:
+    """Build a Telegram status report from probe results."""
+    ok_count = sum(1 for r in results.values() if r["status"] == "ok")
+    fail_count = sum(1 for r in results.values() if r["status"] == "fail")
+    lines = [f"agentCrab {header}: {ok_count} OK, {fail_count} FAIL\n"]
+    for r in results.values():
+        icon = "[OK]" if r["status"] == "ok" else "[FAIL]"
+        lines.append(f"{icon} {r['label']}: {r.get('detail', '')}")
+    return "\n".join(lines)
+
+
 async def health_probe_loop():
-    """Background loop: run all probes every PROBE_INTERVAL."""
+    """Background loop: run all probes every PROBE_INTERVAL.
+
+    Telegram gets a report every round. Bark only fires on errors (via run_all_probes).
+    """
     try:
         # Wait 30s for app to stabilize
         await asyncio.sleep(30)
 
         logger.info("Running initial health probes...")
         results = await run_all_probes()
-        ok_count = sum(1 for r in results.values() if r["status"] == "ok")
-        fail_count = sum(1 for r in results.values() if r["status"] == "fail")
-        logger.info(f"Initial health check: {ok_count} OK, {fail_count} FAIL")
-
-        # Send startup summary
-        lines = ["agentCrab server started. Health check results:\n"]
-        for name, r in results.items():
-            icon = "[OK]" if r["status"] == "ok" else "[FAIL]"
-            lines.append(f"{icon} {r['label']}: {r.get('detail', '')}")
-        await _notify(
-            message="\n".join(lines),
-            bark_title="agentCrab Started",
-            bark_body=f"{ok_count} OK, {fail_count} FAIL",
-        )
+        await send_telegram(_build_report(results, header="started"))
 
         while True:
             # Jitter: 12-20 min instead of fixed 15 min
@@ -350,7 +347,8 @@ async def health_probe_loop():
             await asyncio.sleep(jittered)
             logger.info("Running periodic health probes...")
             try:
-                await run_all_probes()
+                results = await run_all_probes()
+                await send_telegram(_build_report(results))
             except Exception as e:
                 logger.error(f"Health probe error: {e}")
 
