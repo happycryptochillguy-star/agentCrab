@@ -41,7 +41,7 @@ market, outcome, orderbook = client.find_tradeable("bitcoin")
 # outcome = {"outcome": "Yes", "price": 0.65, "token_id": "71321..."}
 # orderbook.best_bid = "0.64", orderbook.best_ask = "0.66"
 
-client.setup_trading()
+# buy() auto-calls setup_trading() if needed — no try/except required
 result = client.buy(outcome["token_id"], size=5.0, price=float(orderbook.best_ask))
 ```
 
@@ -63,17 +63,15 @@ price = client.get_price(yes_token)
 # price.midpoint, price.last_trade_price are most reliable
 # price.best_bid/best_ask may be None for some markets
 
-# 4. Setup trading (once per session — credentials are in-memory only)
-from agentcrab import SetupRequired
-try:
-    result = client.buy(yes_token, size=5.0, price=0.65)
-except SetupRequired:
-    client.setup_trading()  # deploys Safe + approvals + L2 creds
-    result = client.buy(yes_token, size=5.0, price=0.65)
+# 4. Buy — setup_trading() is called automatically on first trade
+result = client.buy(yes_token, size=5.0, price=0.65)
 # result.order_id, result.status, result.success
 ```
 
-**Note:** `setup_trading()` caches L2 credentials on the server. On repeat sessions it retrieves cached credentials for free (Safe + approvals are already on-chain), costing 0 USDT. Only the first-ever call costs 0.01-0.03 USDT.
+**Notes:**
+- `buy()` and `sell()` auto-call `setup_trading()` if credentials are missing. No try/except needed.
+- `setup_trading()` caches L2 credentials on the server. Repeat sessions retrieve cached credentials for free (0 USDT). First-ever call costs 0.01-0.03 USDT.
+- Client-side validation: price must be 0.01-0.99. Invalid orders raise `OrderError` immediately without hitting the server. Minimum order size varies by market (typically ~5 shares).
 
 ## All Methods
 
@@ -141,7 +139,8 @@ client.setup_trading() → SetupResult          # once per session
 client.buy(token_id, size=5.0, price=0.65) → OrderResult
 client.sell(token_id, size=5.0, price=0.70) → OrderResult
 #   .order_id, .status, .success, .taking_amount, .making_amount, .tx_hash
-#   Min order: 5 shares. Price must be 0.01–0.99.
+#   Price must be 0.01–0.99. Min order size varies by market (check orderbook).
+#   Auto-calls setup_trading() if needed — no manual setup required.
 
 client.cancel_order("order_id") → dict
 client.cancel_all_orders() → dict
@@ -196,19 +195,19 @@ client.get_leaderboard() → list[dict]
 ## Error Handling
 
 ```python
-from agentcrab import AgentCrabError, InsufficientBalance, SetupRequired, OrderError
+from agentcrab import AgentCrabError, InsufficientBalance, OrderError
 
 try:
-    result = client.buy(token_id, size=5.0, price=0.65)
-except SetupRequired:
-    client.setup_trading()
     result = client.buy(token_id, size=5.0, price=0.65)
 except InsufficientBalance:
     # Tell human: "Balance is 0, need to deposit USDT first"
 except OrderError as e:
     # e.message has details (min 5 shares, price must be 0.01-0.99, etc.)
+    # Client-side validation catches these BEFORE hitting the server
 except AgentCrabError as e:
     # e.error_code, e.message
 ```
+
+**Note:** `SetupRequired` is handled automatically — `buy()`/`sell()` auto-call `setup_trading()`. You don't need to catch it.
 
 All return types have `.raw` dict with the full server response if you need more fields.

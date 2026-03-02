@@ -365,14 +365,24 @@ class AgentCrab:
         """One-call trading setup: Safe deploy + approvals + L2 credentials.
 
         Idempotent — skips steps already completed. Tries server-cached
-        credentials first to avoid re-deriving (saves 0.01 USDT on repeat sessions).
+        credentials first; if cached, Safe and approvals are already done,
+        so we skip all on-chain checks (saves 2 API roundtrips).
         """
         steps: list[str] = []
 
-        # Step 0: Try cached credentials first (free)
+        # Step 0: Try cached credentials first (free).
+        # If cached, Safe + approvals are guaranteed complete — early return.
         cached = self._fetch_cached_credentials()
         if cached:
-            steps.append("credentials_cached")
+            self._l2_creds = cached
+            return SetupResult(
+                safe_address="",  # already deployed, address not needed
+                api_key=cached["api_key"],
+                secret=cached["secret"],
+                passphrase=cached["passphrase"],
+                steps_completed=["credentials_cached"],
+                raw=cached,
+            )
 
         # Step 1: Deploy Safe (if needed)
         prep_safe = self._http.post("/trading/prepare-deploy-safe")
@@ -409,25 +419,20 @@ class AgentCrab:
         else:
             steps.append("approvals_already_set")
 
-        # Step 4: Use cached creds or derive new ones
-        if cached:
-            api_key = cached["api_key"]
-            secret = cached["secret"]
-            passphrase = cached["passphrase"]
-        else:
-            clob_typed_data = enable_data["clob_typed_data"]
-            timestamp = clob_typed_data["message"]["timestamp"]
-            sig = sign_typed_data(self._private_key, clob_typed_data)
-            creds_resp = self._http.post(
-                "/trading/submit-credentials",
-                json={"signature": sig, "timestamp": timestamp},
-                paid=True,
-            )
-            creds_data = _extract_data(creds_resp)
-            api_key = creds_data["api_key"]
-            secret = creds_data["secret"]
-            passphrase = creds_data["passphrase"]
-            steps.append("credentials_derived")
+        # Step 4: Derive new credentials
+        clob_typed_data = enable_data["clob_typed_data"]
+        timestamp = clob_typed_data["message"]["timestamp"]
+        sig = sign_typed_data(self._private_key, clob_typed_data)
+        creds_resp = self._http.post(
+            "/trading/submit-credentials",
+            json={"signature": sig, "timestamp": timestamp},
+            paid=True,
+        )
+        creds_data = _extract_data(creds_resp)
+        api_key = creds_data["api_key"]
+        secret = creds_data["secret"]
+        passphrase = creds_data["passphrase"]
+        steps.append("credentials_derived")
 
         # Store for future trading calls
         self._l2_creds = {
@@ -480,6 +485,7 @@ class AgentCrab:
         """Buy shares on Polymarket.
 
         Full flow: prepare-order -> sign EIP-712 -> submit-order.
+        Auto-calls ``setup_trading()`` if credentials are missing.
         """
         return self._place_order(token_id, "BUY", size, price, order_type)
 
@@ -493,6 +499,7 @@ class AgentCrab:
         """Sell shares on Polymarket.
 
         Full flow: prepare-order -> sign EIP-712 -> submit-order.
+        Auto-calls ``setup_trading()`` if credentials are missing.
         """
         return self._place_order(token_id, "SELL", size, price, order_type)
 
@@ -504,7 +511,26 @@ class AgentCrab:
         price: float,
         order_type: str,
     ) -> OrderResult:
-        creds = self._require_l2()
+        from ._exceptions import OrderError
+
+        # Client-side validation — fail fast before wasting an API call
+        if not (0.01 <= price <= 0.99):
+            raise OrderError(
+                message=f"Price must be between 0.01 and 0.99, got {price}.",
+                error_code="INVALID_PRICE",
+            )
+        if size <= 0:
+            raise OrderError(
+                message=f"Order size must be positive, got {size}.",
+                error_code="INVALID_SIZE",
+            )
+
+        # Auto setup_trading() if credentials are missing
+        try:
+            creds = self._require_l2()
+        except SetupRequired:
+            self.setup_trading()
+            creds = self._require_l2()
 
         # 1. Prepare order (free, auth only)
         prep = self._http.post(
@@ -573,8 +599,13 @@ class AgentCrab:
 
         Each order dict: {token_id, side, size, price, order_type?}.
         Full flow: prepare-batch-order -> sign all -> submit-batch-order.
+        Auto-calls ``setup_trading()`` if credentials are missing.
         """
-        creds = self._require_l2()
+        try:
+            creds = self._require_l2()
+        except SetupRequired:
+            self.setup_trading()
+            creds = self._require_l2()
 
         # 1. Prepare batch
         prep = self._http.post(
@@ -638,8 +669,14 @@ class AgentCrab:
         exit_price: float,
         expires_in_hours: float | None = None,
     ) -> TriggerResult:
-        """Internal: prepare + sign + create a trigger."""
-        creds = self._require_l2()
+        """Internal: prepare + sign + create a trigger.
+        Auto-calls ``setup_trading()`` if credentials are missing.
+        """
+        try:
+            creds = self._require_l2()
+        except SetupRequired:
+            self.setup_trading()
+            creds = self._require_l2()
 
         # 1. Prepare trigger order
         prep = self._http.post(

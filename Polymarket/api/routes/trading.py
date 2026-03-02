@@ -650,23 +650,10 @@ async def submit_batch_order(
             ).model_dump(),
         )
 
-    # Manual variable-amount payment
+    # Atomic check-and-deduct in a single SQL UPDATE with WHERE guard.
+    # No separate balance check — prevents race condition with concurrent requests.
     n = len(req.orders)
     total_cost_wei = n * settings.payment_amount_wei
-    remaining = await payment_svc.check_prepaid_balance(wallet_address)
-    if remaining < total_cost_wei:
-        raise HTTPException(
-            status_code=402,
-            detail=ErrorResponse(
-                error_code="INSUFFICIENT_BALANCE",
-                message=(
-                    f"Batch of {n} orders costs {n} x 0.01 = {n * 0.01:.2f} USDT. "
-                    f"Your balance: {remaining} wei ({remaining // settings.payment_amount_wei} calls remaining). "
-                    f"Please deposit more USDT."
-                ),
-            ).model_dump(),
-        )
-
     consumed = await balance_svc.consume(
         wallet_address, total_cost_wei, request.url.path,
     )
@@ -674,8 +661,12 @@ async def submit_batch_order(
         raise HTTPException(
             status_code=402,
             detail=ErrorResponse(
-                error_code="BALANCE_DEDUCTION_FAILED",
-                message="Failed to deduct batch payment. Please try again.",
+                error_code="INSUFFICIENT_BALANCE",
+                message=(
+                    f"Insufficient prepaid balance. Batch of {n} orders costs "
+                    f"{n} x 0.01 = {n * 0.01:.2f} USDT. Deposit USDT to contract "
+                    f"{settings.contract_address} on BSC (chain ID 56)."
+                ),
             ).model_dump(),
         )
     payment_svc.invalidate_balance_cache(wallet_address)
