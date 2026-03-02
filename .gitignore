@@ -23,8 +23,15 @@ Polymarket/contracts/out/
 Polymarket/contracts/cache/
 Polymarket/contracts/broadcast/
 
+# Python build artifacts
+dist/
+*.egg-info/
+
 # Wrangler (Cloudflare)
 .wrangler/
 
 # SQLite
 *.db
+
+# Test scripts (not part of package)
+test_comprehensive.py
