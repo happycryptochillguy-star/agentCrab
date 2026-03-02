@@ -46,9 +46,10 @@ yes_token = market.outcomes[0]["token_id"]
 
 # 3. Check price
 price = client.get_price(yes_token)
-# price.best_bid, price.best_ask, price.midpoint
+# price.midpoint, price.last_trade_price are most reliable
+# price.best_bid/best_ask may be None for some markets
 
-# 4. Setup trading (one-time)
+# 4. Setup trading (once per session — credentials are in-memory only)
 from agentcrab import SetupRequired
 try:
     result = client.buy(yes_token, size=5.0, price=0.65)
@@ -57,6 +58,8 @@ except SetupRequired:
     result = client.buy(yes_token, size=5.0, price=0.65)
 # result.order_id, result.status, result.success
 ```
+
+**Note:** `setup_trading()` stores L2 credentials in memory. Call it once per session. On repeat sessions it only re-derives credentials (Safe + approvals are already on-chain), costing 0.01 USDT.
 
 ## All Methods
 
@@ -71,6 +74,8 @@ client.deposit(amount_usdt=1.0) → DepositResult
 
 client.deposit_to_polymarket(amount_usdt=5.0) → DepositResult
 #   Deposits USDT to Polymarket trading balance (BSC → Polygon)
+#   Note: funds may take 1-2 minutes to appear in CLOB trading balance.
+#   Wait before placing orders after depositing.
 ```
 
 ### Search & Browse (0.01 USDT each)
@@ -92,21 +97,24 @@ client.get_market("market_id") → dict
 
 ```python
 client.get_orderbook("token_id") → Orderbook
-#   .bids, .asks, .best_bid, .best_ask, .spread, .midpoint
+#   .bids (desc), .asks (asc), .best_bid, .best_ask, .spread, .midpoint
 
 client.get_price("token_id") → Price
-#   .best_bid, .best_ask, .midpoint, .spread, .last_trade_price
+#   .midpoint, .last_trade_price  ← most reliable
+#   .best_bid, .best_ask          ← may be None for some markets
+#   .spread
 ```
 
 ### Trading (0.01 USDT each, requires setup_trading)
 
 ```python
-client.setup_trading() → SetupResult          # one-time
+client.setup_trading() → SetupResult          # once per session
 #   .safe_address, .api_key, .secret, .passphrase
 
 client.buy(token_id, size=5.0, price=0.65) → OrderResult
 client.sell(token_id, size=5.0, price=0.70) → OrderResult
 #   .order_id, .status, .success, .taking_amount, .making_amount, .tx_hash
+#   Min order: 5 shares. Price must be 0.01–0.99.
 
 client.cancel_order("order_id") → dict
 client.cancel_all_orders() → dict
@@ -171,7 +179,7 @@ except SetupRequired:
 except InsufficientBalance:
     # Tell human: "Balance is 0, need to deposit USDT first"
 except OrderError as e:
-    # e.message has details (min size $1, invalid price, etc.)
+    # e.message has details (min 5 shares, price must be 0.01-0.99, etc.)
 except AgentCrabError as e:
     # e.error_code, e.message
 ```
