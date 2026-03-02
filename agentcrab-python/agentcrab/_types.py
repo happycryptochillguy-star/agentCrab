@@ -33,6 +33,19 @@ class Market:
     condition_id: str | None = None
     raw: dict = field(default_factory=dict, repr=False)
 
+    def find_outcome(self, name: str) -> dict:
+        """Find an outcome by name (case-insensitive substring match).
+
+        >>> market.find_outcome("Warriors")
+        {"outcome": "Golden State Warriors", "price": 0.05, "token_id": "71321..."}
+        """
+        name_lower = name.lower()
+        for o in self.outcomes:
+            if name_lower in o.get("outcome", "").lower():
+                return o
+        available = [o.get("outcome", "?") for o in self.outcomes]
+        raise ValueError(f"No outcome matching '{name}'. Available: {available}")
+
 
 @dataclass
 class Orderbook:

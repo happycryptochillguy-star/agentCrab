@@ -74,7 +74,7 @@ result = client.buy(yes_token, size=5.0, price=0.65)
 **Notes:**
 - `buy()` and `sell()` auto-call `setup_trading()` if credentials are missing. No try/except needed.
 - `setup_trading()` caches L2 credentials on the server. Repeat sessions retrieve cached credentials for free (0 USDT). First-ever call costs 0.01-0.03 USDT.
-- Client-side validation: price must be 0.01-0.99. Invalid orders raise `OrderError` immediately without hitting the server. Minimum order size varies by market (typically ~5 shares).
+- Client-side validation: price must be 0.001-0.999. Invalid orders raise `OrderError` immediately without hitting the server. Minimum order size varies by market (typically ~5 shares).
 
 ## All Methods
 
@@ -109,6 +109,10 @@ client.get_market("market_id") → dict
 #   .event_id, .title, .slug, .volume (float), .end_date, .tags, .image
 #   .condition_id (str, for use with get_market)
 #   .outcomes = [{"outcome": "Yes", "price": 0.65, "token_id": "...", "condition_id": "..."}, ...]
+#
+# Find a specific outcome by name (case-insensitive substring match):
+#   market.find_outcome("Warriors")
+#   → {"outcome": "Golden State Warriors", "price": 0.05, "token_id": "..."}
 ```
 
 ### Find Tradeable Market (convenience)
@@ -144,7 +148,7 @@ client.setup_trading() → SetupResult          # once per session
 client.buy(token_id, size=5.0, price=0.65) → OrderResult
 client.sell(token_id, size=5.0, price=0.70) → OrderResult
 #   .order_id, .status, .success, .taking_amount, .making_amount, .tx_hash
-#   Price must be 0.01–0.99. Min order size varies by market (check orderbook).
+#   Price must be 0.001–0.999. Min order size varies by market (check orderbook).
 #   Auto-calls setup_trading() if needed — no manual setup required.
 
 client.cancel_order("order_id") → dict
@@ -207,7 +211,7 @@ try:
 except InsufficientBalance:
     # Tell human: "Balance is 0, need to deposit USDT first"
 except OrderError as e:
-    # e.message has details (min 5 shares, price must be 0.01-0.99, etc.)
+    # e.message has details (min 5 shares, price must be 0.001-0.999, etc.)
     # Client-side validation catches these BEFORE hitting the server
 except AgentCrabError as e:
     # e.error_code, e.message

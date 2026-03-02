@@ -516,9 +516,9 @@ class AgentCrab:
         from ._exceptions import OrderError
 
         # Client-side validation — fail fast before wasting an API call
-        if not (0.01 <= price <= 0.99):
+        if not (0.001 <= price <= 0.999):
             raise OrderError(
-                message=f"Price must be between 0.01 and 0.99, got {price}.",
+                message=f"Price must be between 0.001 and 0.999, got {price}.",
                 error_code="INVALID_PRICE",
             )
         if size <= 0:
