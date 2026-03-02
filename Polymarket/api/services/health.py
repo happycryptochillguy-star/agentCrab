@@ -66,13 +66,13 @@ async def _probe_gamma() -> tuple[bool, str]:
 
 async def _probe_data_api() -> tuple[bool, str]:
     c = get_proxy_client()
-    # /activity is more stable than /leaderboard (which 404s intermittently)
     resp = await c.get(
-        f"{settings.data_api_url}/activity",
-        params={"limit": 1},
+        f"{settings.data_api_url}/v1/leaderboard",
+        params={"category": "OVERALL", "timePeriod": "ALL", "orderBy": "PNL", "limit": 1},
     )
     resp.raise_for_status()
-    return True, f"OK (status {resp.status_code})"
+    data = resp.json()
+    return True, f"OK ({len(data)} entries)"
 
 
 async def _probe_clob() -> tuple[bool, str]:

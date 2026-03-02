@@ -681,19 +681,36 @@ class AgentCrab:
 
 
 def _parse_market(d: dict) -> Market:
-    """Parse a server event/market dict into a Market dataclass."""
-    outcomes = d.get("markets", d.get("outcomes", []))
-    # Flatten nested market outcomes
-    if outcomes and isinstance(outcomes, list) and isinstance(outcomes[0], dict) and "outcomes" in outcomes[0]:
-        flat: list[dict] = []
-        for m in outcomes:
-            q = m.get("question", "")
-            for o in m.get("outcomes", []):
-                entry = dict(o) if isinstance(o, dict) else {"outcome": str(o)}
-                if q:
-                    entry["market_question"] = q
-                flat.append(entry)
-        outcomes = flat
+    """Parse a server event/market dict into a Market dataclass.
+
+    Server formats:
+    - Slim (search/browse): {candidates: [{name, chance, token_id}, ...]}
+    - Full (events/markets): {markets: [{question, outcomes, outcomePrices, clobTokenIds}, ...]}
+    """
+    # Try "candidates" first (slim server response)
+    candidates = d.get("candidates")
+    if candidates and isinstance(candidates, list):
+        outcomes = [
+            {
+                "outcome": c.get("name", ""),
+                "price": _chance_to_float(c.get("chance")),
+                "token_id": c.get("token_id"),
+            }
+            for c in candidates
+        ]
+    else:
+        # Fallback: full Gamma-style response
+        outcomes = d.get("markets", d.get("outcomes", []))
+        if outcomes and isinstance(outcomes, list) and isinstance(outcomes[0], dict) and "outcomes" in outcomes[0]:
+            flat: list[dict] = []
+            for m in outcomes:
+                q = m.get("question", "")
+                for o in m.get("outcomes", []):
+                    entry = dict(o) if isinstance(o, dict) else {"outcome": str(o)}
+                    if q:
+                        entry["market_question"] = q
+                    flat.append(entry)
+            outcomes = flat
 
     return Market(
         event_id=d.get("event_id", d.get("id", "")),
@@ -706,3 +723,16 @@ def _parse_market(d: dict) -> Market:
         image=d.get("image"),
         raw=d,
     )
+
+
+def _chance_to_float(chance) -> float | None:
+    """Convert '65.2%' or 0.652 to float 0.652."""
+    if chance is None:
+        return None
+    if isinstance(chance, (int, float)):
+        return float(chance)
+    s = str(chance).strip().rstrip("%")
+    try:
+        return float(s) / 100.0
+    except (ValueError, TypeError):
+        return None

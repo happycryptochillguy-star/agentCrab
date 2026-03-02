@@ -15,23 +15,29 @@ async def get_leaderboard(limit: int = 20, offset: int = 0) -> list[LeaderboardE
     """Get top traders leaderboard."""
     client = get_proxy_client()
     resp = await client.get(
-        f"{settings.data_api_url}/leaderboard",
-        params={"limit": limit, "offset": offset},
+        f"{settings.data_api_url}/v1/leaderboard",
+        params={
+            "category": "OVERALL",
+            "timePeriod": "ALL",
+            "orderBy": "PNL",
+            "limit": min(limit, 50),
+            "offset": offset,
+        },
     )
     resp.raise_for_status()
     raw = resp.json()
 
     entries: list[LeaderboardEntry] = []
-    for i, r in enumerate(raw):
+    for r in raw:
         entries.append(
             LeaderboardEntry(
-                rank=offset + i + 1,
-                address=r.get("address", ""),
-                display_name=r.get("displayName") or r.get("username"),
-                volume=str(r.get("volume", "")) or None,
+                rank=int(r.get("rank", 0)),
+                address=r.get("proxyWallet", ""),
+                display_name=r.get("userName") or r.get("pseudonym"),
+                volume=str(r.get("vol", "")) or None,
                 pnl=str(r.get("pnl", "")) or None,
-                positions_count=r.get("positionsCount"),
-                trades_count=r.get("tradesCount"),
+                positions_count=None,
+                trades_count=None,
             )
         )
     return entries
