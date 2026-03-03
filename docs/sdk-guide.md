@@ -6,8 +6,12 @@
 pip install -U agentcrab  # always use latest version
 from agentcrab import AgentCrab
 
-# With existing key:
+# With existing key (use as context manager to auto-close connections):
+with AgentCrab("https://api.agentcrab.ai/polymarket", "0xPRIVATE_KEY") as client:
+    markets = client.search("bitcoin")
+# Or without context manager:
 client = AgentCrab("https://api.agentcrab.ai/polymarket", "0xPRIVATE_KEY")
+# ... use client ... then call client.close() when done.
 
 # Create new wallet (no key needed):
 wallet = AgentCrab.create_wallet("https://api.agentcrab.ai/polymarket")
@@ -83,6 +87,7 @@ result = client.buy(yes_token, size=5.0, price=0.65)
 ```python
 client.get_balance() → Balance
 #   .calls_remaining (int)          ← API calls left
+#   .remaining_usdt (float)         ← prepaid USDT balance
 #   .trading_balance_usdc (float)   ← USDC available for trading on Polymarket
 #   .safe_address (str)             ← Polymarket trading wallet address
 
@@ -159,6 +164,7 @@ client.sell(token_id, size=5.0, price=0.70) → OrderResult
 client.cancel_order("order_id") → dict
 client.cancel_all_orders() → dict
 client.get_open_orders() → list[dict]
+client.get_open_orders(market="condition_id") → list[dict]  # filter by market
 ```
 
 ### Batch Orders (N x 0.01 USDT)
@@ -175,14 +181,18 @@ result = client.batch_order([
 
 ```python
 client.set_stop_loss(token_id, trigger_price=0.30, size=5.0, exit_price=0.29)
-client.set_take_profit(token_id, trigger_price=0.80, size=5.0, exit_price=0.79)
+client.set_stop_loss(token_id, trigger_price=0.30, size=5.0, exit_price=0.29, exit_side="BUY")  # short position
+client.set_take_profit(token_id, trigger_price=0.80, size=5.0, exit_price=0.79, expires_in_hours=24)
 # → TriggerResult: .trigger_id, .status
+# Optional params: exit_side (default "SELL"), expires_in_hours (default None = no expiry)
 
 client.get_triggers() → list[Trigger]
+client.get_triggers(status="active", token_id="...") → list[Trigger]
 #   .trigger_id, .token_id, .trigger_type, .trigger_price, .status
 
 client.cancel_trigger("trigger_id") → dict
 client.cancel_all_triggers() → dict
+client.cancel_all_triggers(token_id="...") → dict  # cancel for specific token only
 ```
 
 Trigger logic:
@@ -194,7 +204,7 @@ Trigger logic:
 | Short (buy to exit) | stop_loss | price >= trigger_price |
 | Short (buy to exit) | take_profit | price <= trigger_price |
 
-### Positions & History (0.01 USDT each)
+### Positions & Activity (0.01 USDT each)
 
 ```python
 client.get_positions() → list[Position]
@@ -203,7 +213,45 @@ client.get_positions() → list[Position]
 client.get_trades() → list[Trade]
 #   .side, .size, .price, .outcome, .timestamp
 
+client.get_activity(limit=50, offset=0) → list[Activity]
+#   .type, .amount, .timestamp  ← on-chain activity (trades, splits, merges, redemptions)
+```
+
+### Other Traders (0.01 USDT each)
+
+```python
+client.get_trader_positions("0xAddress") → list[Position]
+#   Same Position type as get_positions() — view any trader's positions
+
+client.get_trader_trades("0xAddress", limit=50, offset=0) → list[Trade]
+#   Same Trade type as get_trades() — view any trader's trade history
+```
+
+### Leaderboard (0.01 USDT each)
+
+```python
 client.get_leaderboard() → list[dict]
+
+client.get_category_leaderboard("crypto", sort_by="pnl", limit=20) → dict
+#   Category-specific leaderboard. sort_by: 'pnl', 'volume', 'positions', 'win_rate'
+#   Returns {"entries": [...], "meta": {...}}
+
+client.get_trader_category_profile("0xAddress", category="sports") → dict
+#   Per-category breakdown for a trader, with optional positions
+
+client.get_category_stats("crypto") → dict
+#   Aggregate stats: total_traders, avg_pnl, best_trader_pnl, etc.
+```
+
+### Historical Events (0.01 USDT each)
+
+```python
+client.search_history(query="bitcoin", category="crypto", limit=20) → list[HistoricalEvent]
+#   .event_id, .title, .category, .volume, .resolution, .closed_time
+#   Search closed Polymarket events from local history DB
+
+client.sync_history() → dict
+#   Trigger background sync of closed events (free, auth only, throttled to 1/hour)
 ```
 
 ## Error Handling

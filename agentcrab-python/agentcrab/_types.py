@@ -3,19 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
 
 @dataclass
 class Balance:
     """Prepaid balance on agentCrab + Polymarket trading balance."""
     wallet_address: str
-    remaining_wei: str
     calls_remaining: int
+    remaining_usdt: float = 0.0
     safe_address: str = ""
     trading_balance_usdc: float = 0.0
-    total_deposited_wei: str = ""
-    total_consumed_wei: str = ""
     raw: dict = field(default_factory=dict, repr=False)
 
 
@@ -126,9 +123,9 @@ class DepositResult:
 class SetupResult:
     """Result of setup_trading()."""
     safe_address: str
-    api_key: str
-    secret: str
-    passphrase: str
+    api_key: str = field(repr=False)
+    secret: str = field(repr=False)
+    passphrase: str = field(repr=False)
     steps_completed: list[str] = field(default_factory=list)
     raw: dict = field(default_factory=dict, repr=False)
 
@@ -177,7 +174,24 @@ class Trigger:
     raw: dict = field(default_factory=dict, repr=False)
 
 
-def _safe_get(d: dict, key: str, default: Any = None) -> Any:
-    """Get a value from a dict, returning default if missing or None."""
-    v = d.get(key)
-    return v if v is not None else default
+@dataclass
+class Activity:
+    """An on-chain activity record (trade, split, merge, redemption)."""
+    type: str
+    amount: str
+    timestamp: str | None = None
+    raw: dict = field(default_factory=dict, repr=False)
+
+
+@dataclass
+class HistoricalEvent:
+    """A closed Polymarket event from local history DB."""
+    event_id: str
+    title: str
+    category: str | None = None
+    volume: float | None = None
+    resolution: str | None = None
+    closed_time: str | None = None
+    raw: dict = field(default_factory=dict, repr=False)
+
+

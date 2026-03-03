@@ -93,7 +93,10 @@ class HttpTransport:
         try:
             body = resp.json()
             # Handle FastAPI's HTTPException detail format
-            detail = body if isinstance(body, dict) and "error_code" in body else body.get("detail", body)
+            if isinstance(body, dict):
+                detail = body if "error_code" in body else body.get("detail", body)
+            else:
+                detail = body
             if isinstance(detail, dict):
                 error_code = detail.get("error_code", "")
                 message = detail.get("message", resp.text)
@@ -114,7 +117,7 @@ class HttpTransport:
         auth: bool = True,
         paid: bool = False,
         l2_creds: dict | None = None,
-    ) -> dict:
+    ) -> Any:
         """Send GET request. Returns parsed JSON body."""
         headers = self._auth_headers() if (auth or paid) else {}
         if l2_creds:
@@ -134,7 +137,7 @@ class HttpTransport:
         auth: bool = True,
         paid: bool = False,
         l2_creds: dict | None = None,
-    ) -> dict:
+    ) -> Any:
         """Send POST request. Returns parsed JSON body."""
         headers = self._auth_headers() if (auth or paid) else {}
         if l2_creds:
@@ -155,7 +158,7 @@ class HttpTransport:
         auth: bool = True,
         paid: bool = False,
         l2_creds: dict | None = None,
-    ) -> dict:
+    ) -> Any:
         """Send DELETE request. Returns parsed JSON body."""
         headers = self._auth_headers() if (auth or paid) else {}
         if l2_creds:

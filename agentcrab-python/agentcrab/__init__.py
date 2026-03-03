@@ -14,9 +14,11 @@ from ._exceptions import (
     SetupRequired,
 )
 from ._types import (
+    Activity,
     Balance,
     BatchOrderResult,
     DepositResult,
+    HistoricalEvent,
     Market,
     Orderbook,
     OrderResult,
@@ -40,9 +42,11 @@ __all__ = [
     "PaymentError",
     "SetupRequired",
     # Types
+    "Activity",
     "Balance",
     "BatchOrderResult",
     "DepositResult",
+    "HistoricalEvent",
     "Market",
     "Orderbook",
     "OrderResult",

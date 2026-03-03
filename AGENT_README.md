@@ -48,7 +48,7 @@ HTTP API + Python SDK for Polymarket. Browse, trade, manage positions.
 | "Buy Yes on this market" | `buy(token_id, size, price)` (auto-setup) | See [Place Orders](docs/place-orders.md) |
 | "Set stop loss at 0.30" | `set_stop_loss(token_id, 0.30, size, 0.29)` | See [SDK Guide](docs/sdk-guide.md) |
 | "My positions" | `get_positions()` | `GET /positions` |
-| "Who's best at crypto?" | `get_leaderboard()` | `GET /traders/categories/leaderboard?category=crypto` |
+| "Who's best at crypto?" | `get_category_leaderboard("crypto")` | `GET /traders/categories/leaderboard?category=crypto` |
 | "What categories exist?" | *(free, no SDK needed)* | `GET /markets/categories` |
 
 ---

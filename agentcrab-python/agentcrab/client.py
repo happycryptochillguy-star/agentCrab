@@ -8,9 +8,11 @@ from ._exceptions import SetupRequired
 from ._http import HttpTransport, _extract_data
 from ._signer import sign_safe_tx_hash, sign_transaction, sign_typed_data
 from ._types import (
+    Activity,
     Balance,
     BatchOrderResult,
     DepositResult,
+    HistoricalEvent,
     Market,
     Orderbook,
     OrderResult,
@@ -90,12 +92,10 @@ class AgentCrab:
         d = _extract_data(resp)
         return Balance(
             wallet_address=d.get("wallet_address", self.address),
-            remaining_wei=d.get("remaining_wei", "0"),
             calls_remaining=d.get("calls_remaining", 0),
+            remaining_usdt=d.get("remaining_usdt", 0.0),
             safe_address=d.get("safe_address", ""),
             trading_balance_usdc=d.get("trading_balance_usdc", 0.0),
-            total_deposited_wei=d.get("total_deposited_wei", "0"),
-            total_consumed_wei=d.get("total_consumed_wei", "0"),
             raw=d,
         )
 
@@ -207,6 +207,40 @@ class AgentCrab:
     def get_market(self, market_id: str) -> dict:
         """Get a single market by ID (raw dict)."""
         resp = self._http.get(f"/markets/{market_id}", paid=True)
+        return _extract_data(resp)
+
+    def search_history(
+        self,
+        query: str | None = None,
+        category: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[HistoricalEvent]:
+        """Search closed Polymarket events from local history DB."""
+        params: dict = {"limit": limit, "offset": offset}
+        if query:
+            params["query"] = query
+        if category:
+            params["category"] = category
+        resp = self._http.get("/markets/history", params=params, paid=True)
+        data = _extract_data(resp)
+        items = data if isinstance(data, list) else data.get("events", [])
+        return [
+            HistoricalEvent(
+                event_id=e.get("event_id", e.get("id", "")),
+                title=e.get("title", ""),
+                category=e.get("category"),
+                volume=_parse_volume(e.get("volume")),
+                resolution=e.get("resolution"),
+                closed_time=e.get("closed_time"),
+                raw=e,
+            )
+            for e in items
+        ]
+
+    def sync_history(self) -> dict:
+        """Trigger background sync of closed events (free, auth only)."""
+        resp = self._http.post("/markets/history/sync")
         return _extract_data(resp)
 
     def get_orderbook(self, token_id: str) -> Orderbook:
@@ -341,6 +375,65 @@ class AgentCrab:
             for t in items
         ]
 
+    def get_activity(self, limit: int = 50, offset: int = 0) -> list[Activity]:
+        """Get your on-chain activity (trades, splits, merges, redemptions)."""
+        resp = self._http.get("/positions/activity", params={"limit": limit, "offset": offset}, paid=True)
+        data = _extract_data(resp)
+        items = data if isinstance(data, list) else data.get("activity", [])
+        return [
+            Activity(
+                type=a.get("type", ""),
+                amount=str(a.get("amount", "0")),
+                timestamp=str(a["timestamp"]) if a.get("timestamp") is not None else None,
+                raw=a,
+            )
+            for a in items
+        ]
+
+    # ------------------------------------------------------------------
+    # Other Traders
+    # ------------------------------------------------------------------
+
+    def get_trader_positions(self, address: str) -> list[Position]:
+        """Get any trader's Polymarket positions."""
+        resp = self._http.get(f"/traders/{address}/positions", paid=True)
+        data = _extract_data(resp)
+        items = data if isinstance(data, list) else data.get("positions", [])
+        return [
+            Position(
+                token_id=p.get("token_id", ""),
+                outcome=p.get("outcome", ""),
+                size=p.get("size", "0"),
+                question=p.get("question"),
+                market_slug=p.get("market_slug"),
+                avg_price=p.get("avg_price"),
+                current_price=p.get("current_price"),
+                pnl=p.get("pnl"),
+                pnl_percent=p.get("pnl_percent"),
+                raw=p,
+            )
+            for p in items
+        ]
+
+    def get_trader_trades(self, address: str, limit: int = 50, offset: int = 0) -> list[Trade]:
+        """Get any trader's recent trades."""
+        resp = self._http.get(f"/traders/{address}/trades", params={"limit": limit, "offset": offset}, paid=True)
+        data = _extract_data(resp)
+        items = data if isinstance(data, list) else data.get("trades", [])
+        return [
+            Trade(
+                side=t.get("side", ""),
+                size=t.get("size", "0"),
+                price=t.get("price", "0"),
+                trade_id=t.get("trade_id"),
+                market_slug=t.get("market_slug"),
+                outcome=t.get("outcome"),
+                timestamp=t.get("timestamp"),
+                raw=t,
+            )
+            for t in items
+        ]
+
     # ------------------------------------------------------------------
     # Leaderboard
     # ------------------------------------------------------------------
@@ -350,6 +443,32 @@ class AgentCrab:
         resp = self._http.get("/traders/leaderboard", params={"limit": limit, "offset": offset}, paid=True)
         data = _extract_data(resp)
         return data if isinstance(data, list) else data.get("leaderboard", [])
+
+    def get_category_leaderboard(
+        self,
+        category: str,
+        sort_by: str = "pnl",
+        limit: int = 20,
+        offset: int = 0,
+    ) -> dict:
+        """Get category-specific leaderboard (e.g. 'crypto', 'sports.nba')."""
+        resp = self._http.get(
+            "/traders/categories/leaderboard",
+            params={"category": category, "sort_by": sort_by, "limit": limit, "offset": offset},
+            paid=True,
+        )
+        return _extract_data(resp)
+
+    def get_trader_category_profile(self, address: str, category: str | None = None) -> dict:
+        """Get a trader's per-category breakdown with optional positions."""
+        params = {"category": category} if category else None
+        resp = self._http.get(f"/traders/categories/{address}/profile", params=params, paid=True)
+        return _extract_data(resp)
+
+    def get_category_stats(self, category: str) -> dict:
+        """Get aggregate stats for a category (total_traders, avg_pnl, etc.)."""
+        resp = self._http.get("/traders/categories/stats", params={"category": category}, paid=True)
+        return _extract_data(resp)
 
     # ------------------------------------------------------------------
     # Trading Setup
@@ -604,7 +723,7 @@ class AgentCrab:
         params = {"market": market} if market else None
         resp = self._http.get("/trading/orders", params=params, paid=True, l2_creds=creds)
         data = _extract_data(resp)
-        return data if isinstance(data, list) else []
+        return data if isinstance(data, list) else data.get("orders", []) if isinstance(data, dict) else []
 
     def batch_order(self, orders: list[dict]) -> BatchOrderResult:
         """Place multiple orders at once.
@@ -768,9 +887,14 @@ class AgentCrab:
             token_id, "take_profit", trigger_price, exit_side, size, exit_price, expires_in_hours,
         )
 
-    def get_triggers(self, status: str | None = None) -> list[Trigger]:
-        """Get your triggers (optionally filtered by status)."""
-        params = {"status": status} if status else None
+    def get_triggers(self, status: str | None = None, token_id: str | None = None) -> list[Trigger]:
+        """Get your triggers (optionally filtered by status and/or token_id)."""
+        params: dict = {}
+        if status:
+            params["status"] = status
+        if token_id:
+            params["token_id"] = token_id
+        params = params or None
         resp = self._http.get("/trading/triggers", params=params)
         data = _extract_data(resp)
         items = data if isinstance(data, list) else data.get("triggers", [])

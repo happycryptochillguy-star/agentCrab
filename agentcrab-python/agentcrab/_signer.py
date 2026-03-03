@@ -24,12 +24,8 @@ def sign_transaction(private_key: str, tx: dict) -> str:
 
     Used for: BSC deposits, Polygon approve txs.
     """
-    account = Account.from_key(private_key)
-    signed = account.sign_transaction(tx)
-    raw = signed.raw_transaction
-    if isinstance(raw, (bytes, bytearray)):
-        return "0x" + raw.hex()
-    return "0x" + bytes(raw).hex()
+    signed = Account.sign_transaction(tx, private_key)
+    return "0x" + signed.raw_transaction.hex()
 
 
 def sign_safe_tx_hash(private_key: str, hash_hex: str) -> str:

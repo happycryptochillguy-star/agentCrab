@@ -64,6 +64,9 @@ for pos in client.get_positions():
 | `get_market(market_id)` | Get single market | 0.01 USDT |
 | `get_orderbook(token_id)` | Get orderbook | 0.01 USDT |
 | `get_price(token_id)` | Get price | 0.01 USDT |
+| `find_tradeable(query, category, mood)` | Find liquid market + orderbook | varies |
+| `search_history(query, category)` | Search closed events | 0.01 USDT |
+| `sync_history()` | Trigger closed-event sync | Free |
 
 ### Positions & History
 
@@ -71,19 +74,42 @@ for pos in client.get_positions():
 |--------|-------------|------|
 | `get_positions()` | Your positions | 0.01 USDT |
 | `get_trades(limit, offset)` | Your trades | 0.01 USDT |
-| `get_leaderboard(limit, offset)` | Leaderboard | 0.01 USDT |
+| `get_activity(limit, offset)` | On-chain activity | 0.01 USDT |
+| `get_trader_positions(address)` | Any trader's positions | 0.01 USDT |
+| `get_trader_trades(address)` | Any trader's trades | 0.01 USDT |
 
-### Trading (requires `setup_trading()` first)
+### Leaderboard
+
+| Method | Description | Cost |
+|--------|-------------|------|
+| `get_leaderboard(limit, offset)` | Global leaderboard | 0.01 USDT |
+| `get_category_leaderboard(category)` | Category leaderboard | 0.01 USDT |
+| `get_trader_category_profile(address)` | Trader category breakdown | 0.01 USDT |
+| `get_category_stats(category)` | Category aggregate stats | 0.01 USDT |
+
+### Trading (auto-setup on first trade)
 
 | Method | Description | Cost |
 |--------|-------------|------|
 | `setup_trading()` | Deploy Safe + approvals + creds | 0.01-0.03 USDT |
 | `set_credentials(key, secret, passphrase)` | Manual cred set | Free |
+| `refresh_balance()` | Refresh CLOB balance cache | Free |
 | `buy(token_id, size, price)` | Buy shares | 0.01 USDT |
 | `sell(token_id, size, price)` | Sell shares | 0.01 USDT |
+| `batch_order(orders)` | Batch orders (max 15) | N × 0.01 USDT |
 | `cancel_order(order_id)` | Cancel order | 0.01 USDT |
 | `cancel_all_orders()` | Cancel all | 0.01 USDT |
 | `get_open_orders(market)` | Open orders | 0.01 USDT |
+
+### Stop Loss / Take Profit
+
+| Method | Description | Cost |
+|--------|-------------|------|
+| `set_stop_loss(token_id, trigger_price, size, exit_price)` | Set stop loss | 0.01 USDT |
+| `set_take_profit(token_id, trigger_price, size, exit_price)` | Set take profit | 0.01 USDT |
+| `get_triggers(status, token_id)` | List triggers | Free |
+| `cancel_trigger(trigger_id)` | Cancel trigger | Free |
+| `cancel_all_triggers(token_id)` | Cancel all triggers | Free |
 
 ### Wallet
 
@@ -104,13 +130,11 @@ print(balance.raw)               # full server response dict
 ## Error Handling
 
 ```python
-from agentcrab import AgentCrabError, InsufficientBalance, SetupRequired
+from agentcrab import AgentCrabError, InsufficientBalance
 
 try:
     result = client.buy(token_id, size=5.0, price=0.65)
-except SetupRequired:
-    client.setup_trading()
-    result = client.buy(token_id, size=5.0, price=0.65)
+    # buy()/sell() auto-call setup_trading() if needed — no manual setup required
 except InsufficientBalance as e:
     print(f"Top up: {e.message}")
 except AgentCrabError as e:
