@@ -136,7 +136,8 @@ async def prepare_transfer(
         )
 
     # 2. Convert desired deposit to USDC.e base units (6 decimals)
-    to_amount_usdc = int(req.amount_usdt * 10**6)
+    from decimal import Decimal
+    to_amount_usdc = int(Decimal(str(req.amount_usdt)) * 10**6)
 
     # 3. Get quote from fun.xyz (returns pre-built transactions)
     try:

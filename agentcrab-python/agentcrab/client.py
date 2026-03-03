@@ -56,6 +56,9 @@ class AgentCrab:
             timeout=timeout,
         )
 
+    def __repr__(self) -> str:
+        return f"AgentCrab(address={self.address!r}, api_url={self._http._base_url!r})"
+
     def close(self) -> None:
         """Close the underlying HTTP client."""
         self._http.close()

@@ -1,4 +1,6 @@
 import asyncio
+import os
+import stat
 import time
 
 import aiosqlite
@@ -13,6 +15,21 @@ _db: aiosqlite.Connection | None = None
 _write_lock = asyncio.Lock()
 
 
+def _secure_db_file(path: str):
+    """Set database file permissions to owner-only (600).
+    Prevents other users on the server from reading L2 credentials."""
+    try:
+        if os.path.exists(path):
+            os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+        # Also secure WAL and SHM files if they exist
+        for suffix in ("-wal", "-shm"):
+            wal = path + suffix
+            if os.path.exists(wal):
+                os.chmod(wal, stat.S_IRUSR | stat.S_IWUSR)
+    except OSError:
+        pass  # Best effort — may fail on some filesystems
+
+
 async def get_db() -> aiosqlite.Connection:
     """Get or create the shared DB connection."""
     global _db
@@ -20,6 +37,7 @@ async def get_db() -> aiosqlite.Connection:
         _db = await aiosqlite.connect(DB_PATH)
         await _db.execute("PRAGMA journal_mode=WAL")
         await _db.execute("PRAGMA busy_timeout=5000")
+        _secure_db_file(DB_PATH)
     return _db
 
 

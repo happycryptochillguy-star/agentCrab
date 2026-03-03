@@ -28,7 +28,8 @@ async def get_balance(
     deposited, consumed, remaining = await balance_svc.get_remaining(wallet_address)
     calls = balance_svc.calls_remaining(remaining)
 
-    remaining_usdt = remaining / 10**18
+    from decimal import Decimal
+    remaining_usdt = float(Decimal(remaining) / 10**18)
 
     # Derive Safe address (pure CREATE2 math, no RPC call)
     safe_address = payment_svc.derive_safe_address(wallet_address)
@@ -100,8 +101,10 @@ async def prepare_deposit(
             ).model_dump(),
         )
 
-    amount_wei = int(req.amount_usdt * 10**18)
-    calls = int(req.amount_usdt / 0.01)
+    from decimal import Decimal
+    amount_dec = Decimal(str(req.amount_usdt))
+    amount_wei = int(amount_dec * 10**18)
+    calls = int(amount_dec / Decimal("0.01"))
 
     try:
         txs = await payment_svc.build_deposit_txs_async(wallet_address, amount_wei)

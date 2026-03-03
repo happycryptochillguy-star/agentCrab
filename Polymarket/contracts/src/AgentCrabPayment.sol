@@ -4,10 +4,11 @@ pragma solidity ^0.8.24;
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-contract AgentCrabPayment is Initializable, UUPSUpgradeable, OwnableUpgradeable {
+contract AgentCrabPayment is Initializable, UUPSUpgradeable, OwnableUpgradeable, ReentrancyGuardUpgradeable {
     using SafeERC20 for IERC20;
 
     IERC20 public usdt;
@@ -30,11 +31,12 @@ contract AgentCrabPayment is Initializable, UUPSUpgradeable, OwnableUpgradeable 
     function initialize(address _usdt, address _owner) external initializer {
         __Ownable_init(_owner);
         __UUPSUpgradeable_init();
+        __ReentrancyGuard_init();
         usdt = IERC20(_usdt);
     }
 
     /// @notice Mode B: Deposit USDT for prepaid usage
-    function deposit(uint256 amount) external {
+    function deposit(uint256 amount) external nonReentrant {
         require(amount > 0, "Amount must be > 0");
         usdt.safeTransferFrom(msg.sender, address(this), amount);
         deposits[msg.sender] += amount;
@@ -43,7 +45,7 @@ contract AgentCrabPayment is Initializable, UUPSUpgradeable, OwnableUpgradeable 
     }
 
     /// @notice Mode A: Pay exactly 0.01 USDT per API call
-    function pay() external {
+    function pay() external nonReentrant {
         usdt.safeTransferFrom(msg.sender, address(this), PAYMENT_AMOUNT);
         directPayments[msg.sender] += PAYMENT_AMOUNT;
         directPaymentCount[msg.sender] += 1;
@@ -51,7 +53,7 @@ contract AgentCrabPayment is Initializable, UUPSUpgradeable, OwnableUpgradeable 
     }
 
     /// @notice Owner withdraws collected USDT
-    function withdraw(uint256 amount) external onlyOwner {
+    function withdraw(uint256 amount) external onlyOwner nonReentrant {
         require(amount > 0, "Amount must be > 0");
         uint256 balance = usdt.balanceOf(address(this));
         require(amount <= balance, "Insufficient contract balance");
