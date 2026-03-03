@@ -1,6 +1,6 @@
 """agentcrab — Python SDK for the agentCrab Polymarket API."""
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from .client import AgentCrab
 from ._exceptions import (
@@ -22,6 +22,7 @@ from ._types import (
     Market,
     Orderbook,
     OrderResult,
+    Points,
     Position,
     Price,
     SetupResult,
@@ -50,6 +51,7 @@ __all__ = [
     "Market",
     "Orderbook",
     "OrderResult",
+    "Points",
     "Position",
     "Price",
     "SetupResult",
