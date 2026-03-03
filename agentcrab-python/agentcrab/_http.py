@@ -128,7 +128,10 @@ class HttpTransport:
             raise NetworkError(message=str(e)) from e
         self._check_version(resp)
         self._raise_for_error(resp)
-        return resp.json()
+        try:
+            return resp.json()
+        except ValueError as e:
+            raise NetworkError(message=f"Invalid JSON response: {e}") from e
 
     def post(
         self,
@@ -148,7 +151,10 @@ class HttpTransport:
             raise NetworkError(message=str(e)) from e
         self._check_version(resp)
         self._raise_for_error(resp)
-        return resp.json()
+        try:
+            return resp.json()
+        except ValueError as e:
+            raise NetworkError(message=f"Invalid JSON response: {e}") from e
 
     def delete(
         self,
@@ -169,7 +175,10 @@ class HttpTransport:
             raise NetworkError(message=str(e)) from e
         self._check_version(resp)
         self._raise_for_error(resp)
-        return resp.json()
+        try:
+            return resp.json()
+        except ValueError as e:
+            raise NetworkError(message=f"Invalid JSON response: {e}") from e
 
 
 def _extract_data(resp: dict) -> Any:

@@ -60,7 +60,7 @@ async def get_capabilities():
             "endpoints": {
                 "free": [
                     {
-                        "path": "/health",
+                        "path": "/health (NOTE: root level, not under /polymarket)",
                         "method": "GET",
                         "description": "Check if the API is running.",
                     },
@@ -177,7 +177,7 @@ async def get_capabilities():
                         "path": "/trading/prepare-order",
                         "method": "POST",
                         "description": "Build EIP-712 typed data for a single order. Auth required, no payment.",
-                        "body": {"token_id": "str", "side": "BUY|SELL", "size": "float", "price": "float"},
+                        "body": {"token_id": "str", "side": "BUY|SELL", "size": "float", "price": "float", "order_type": "GTC|GTD|FOK|FAK (default: GTC)"},
                     },
                     {
                         "path": "/trading/prepare-batch-order",
@@ -257,7 +257,7 @@ async def get_capabilities():
                         "path": "/markets/search",
                         "method": "GET",
                         "description": "Search events across all Polymarket categories. Supports optional category filter.",
-                        "params": {"query": "str?", "tag": "str?", "category": "str? (dot path, e.g. sports.nba)", "limit": "int (1-100)", "offset": "int"},
+                        "params": {"query": "str?", "tag": "str?", "category": "str? (dot path, e.g. sports.nba)", "closed": "bool? (default: false)", "limit": "int (1-100)", "offset": "int"},
                     },
                     {
                         "path": "/markets/events/{event_id}",
@@ -449,13 +449,63 @@ async def get_capabilities():
                 "RATE_LIMITED": {
                     "http_status": 429,
                     "meaning": "Too many requests",
-                    "fix": "Wait and retry. Maximum 30 requests per 60 seconds per IP.",
+                    "fix": "Wait and retry. See rate_limits section for tier-specific limits.",
+                },
+                "VALIDATION_ERROR": {
+                    "http_status": 422,
+                    "meaning": "Request body/params failed validation",
+                    "fix": "Check field types, required fields, and allowed values (e.g., side must be BUY or SELL, order_type must be GTC/GTD/FOK/FAK).",
+                },
+                "SAFE_NOT_DEPLOYED": {
+                    "http_status": 400,
+                    "meaning": "Safe wallet not deployed yet",
+                    "fix": "Call prepare-deploy-safe → submit-deploy-safe first.",
+                },
+                "NO_CREDENTIALS": {
+                    "http_status": 400,
+                    "meaning": "L2 trading credentials not found",
+                    "fix": "Complete enable-trading flow or pass X-Poly-* headers.",
+                },
+                "INVALID_AMOUNT": {
+                    "http_status": 400,
+                    "meaning": "Amount must be positive (and >= 0.01 for deposits)",
+                    "fix": "Check amount_usdt value.",
+                },
+                "INVALID_PRICE": {
+                    "http_status": 400,
+                    "meaning": "Price must be between 0.01 and 0.99",
+                    "fix": "Adjust price to valid range.",
+                },
+                "INVALID_SIZE": {
+                    "http_status": 400,
+                    "meaning": "Order value (size × price) must be >= $1",
+                    "fix": "Increase size or price so the total is at least $1.",
+                },
+                "TRIGGER_NOT_FOUND": {
+                    "http_status": 404,
+                    "meaning": "Trigger ID not found or doesn't belong to your wallet",
+                    "fix": "List triggers with GET /trading/triggers to see active trigger IDs.",
+                },
+                "INVALID_TX_TARGET": {
+                    "http_status": 400,
+                    "meaning": "Transaction target address not in whitelist",
+                    "fix": "Only use transactions built by prepare-* endpoints.",
+                },
+                "TX_REVERTED": {
+                    "http_status": 502,
+                    "meaning": "On-chain transaction reverted",
+                    "fix": "Check wallet balance and allowances, then retry.",
                 },
             },
             "rate_limits": {
-                "max_requests": 30,
                 "window_seconds": 60,
                 "scope": "per IP address",
+                "tiers": {
+                    "open_endpoints": "30 req/min (unauthenticated: /health, /agent/*, /markets/categories, /markets/tags)",
+                    "auth_endpoints": "60 req/min (free authenticated: /payment/*, /deposit/*, /trading/prepare-*)",
+                    "paid_endpoints": "120 req/min (paid: /markets/search, /orderbook/*, /positions/*, etc.)",
+                    "keygen_endpoints": "3 req/min (/trading/submit-deploy-safe, submit-approvals, submit-credentials)",
+                },
             },
             "workflows": {
                 "note": "All follow prepare→sign→submit pattern. Only execute when user requests.",

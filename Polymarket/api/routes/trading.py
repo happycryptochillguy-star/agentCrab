@@ -708,6 +708,11 @@ async def submit_order(
     success = result.get("success", False)
     tx_hashes = result.get("transactionsHashes", [])
 
+    # NOTE: No refund on CLOB logical failure (success=false). The server
+    # completed its work (HMAC auth + CLOB submission). Order failure is the
+    # user's responsibility (bad params, insufficient Polymarket balance, etc.).
+    # HTTP-level failures (502/503) are refunded by the exception handlers above.
+
     # Build human-readable summary
     if status == "matched" and success:
         taking = result.get("takingAmount", "?")
@@ -915,12 +920,17 @@ async def submit_batch_order(
             ).model_dump(),
         )
 
-    # Build response
+    # Build response — detect failures by both "error" key and "success" field
     order_results = []
     success_count = 0
     for i, r in enumerate(results):
-        if isinstance(r, dict) and r.get("error"):
-            order_results.append({"index": i, "success": False, "error": r["error"]})
+        is_fail = (
+            (isinstance(r, dict) and r.get("error"))
+            or (isinstance(r, dict) and r.get("success") is False)
+        )
+        if is_fail:
+            error_msg = r.get("error") or r.get("errorMsg", "Order failed") if isinstance(r, dict) else str(r)
+            order_results.append({"index": i, "success": False, "error": error_msg})
         else:
             entry: dict = {"index": i, "success": True}
             if isinstance(r, dict):

@@ -70,7 +70,7 @@ for pos in client.get_positions():
 | `get_orderbooks_batch(token_ids)` | Batch orderbooks (up to 20) | 0.01 USDT |
 | `get_price(token_id)` | Get price | 0.01 USDT |
 | `get_prices_batch(token_ids)` | Batch prices (up to 20) | 0.01 USDT |
-| `find_tradeable(query, category, mood)` | Find liquid market + orderbook | varies |
+| `find_tradeable(query, category, mood)` | Find liquid market + orderbook (1 search + N orderbook calls) | 0.01+ USDT |
 | `search_history(query, category)` | Search closed events | 0.01 USDT |
 | `sync_history()` | Trigger closed-event sync | Free |
 

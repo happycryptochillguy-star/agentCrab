@@ -294,7 +294,8 @@ def _check_approval_status_sync(safe_address: str) -> dict:
 
 async def check_approval_status(safe_address: str) -> dict:
     """Check approval status without blocking the event loop."""
-    return await asyncio.to_thread(_check_approval_status_sync, safe_address)
+    from api.services.payment import _locked
+    return await asyncio.to_thread(_locked, _check_approval_status_sync, safe_address)
 
 
 def _build_approval_calls(only_missing: list[str] | None = None) -> list[dict]:

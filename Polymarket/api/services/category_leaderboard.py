@@ -250,6 +250,15 @@ async def sync_category_leaderboard(top_n: int = 200) -> dict:
 
             is_win = pnl_val > 0
 
+            # Compute invested amount as volume proxy
+            vol = 0.0
+            try:
+                sz = abs(float(p.size)) if p.size else 0.0
+                ap = abs(float(p.avg_price)) if p.avg_price else 0.0
+                vol = sz * ap
+            except (ValueError, TypeError):
+                pass
+
             # Hierarchical: aggregate into self + all ancestors
             for cat_path in _ancestor_paths(cat):
                 key = (address, cat_path)
@@ -265,6 +274,7 @@ async def sync_category_leaderboard(top_n: int = 200) -> dict:
                 a = agg[key]
                 a["positions"] += 1
                 a["pnl"] += pnl_val
+                a["volume"] += vol
                 if is_win:
                     a["wins"] += 1
                 if a["best_pnl"] is None or pnl_val > a["best_pnl"]:

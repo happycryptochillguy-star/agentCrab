@@ -81,9 +81,29 @@ class AgentCrab:
         """
         import httpx
 
-        resp = httpx.post(f"{api_url.rstrip('/')}/agent/create-wallet", timeout=30)
-        resp.raise_for_status()
-        return _extract_data(resp.json())
+        try:
+            resp = httpx.post(f"{api_url.rstrip('/')}/agent/create-wallet", timeout=30)
+        except httpx.HTTPError as e:
+            raise NetworkError(message=str(e)) from e
+        if resp.status_code >= 400:
+            try:
+                data = resp.json()
+                detail = data.get("detail", data)
+                if isinstance(detail, dict):
+                    raise AgentCrabError(
+                        error_code=detail.get("error_code", "CREATE_WALLET_FAILED"),
+                        message=detail.get("message", resp.text),
+                    )
+            except (ValueError, KeyError):
+                pass
+            raise AgentCrabError(
+                error_code="CREATE_WALLET_FAILED",
+                message=f"HTTP {resp.status_code}: {resp.text[:200]}",
+            )
+        try:
+            return _extract_data(resp.json())
+        except ValueError as e:
+            raise NetworkError(message=f"Invalid JSON response: {e}") from e
 
     # ------------------------------------------------------------------
     # Balance & Payment

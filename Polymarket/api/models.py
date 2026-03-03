@@ -277,6 +277,10 @@ class ClobOrderPayload(BaseModel):
         return v
 
 
+_VALID_SIDES = {"BUY", "SELL"}
+_VALID_ORDER_TYPES = {"GTC", "GTD", "FOK", "FAK"}
+
+
 class PrepareOrderRequest(BaseModel):
     token_id: str
     side: str  # BUY or SELL
@@ -284,11 +288,32 @@ class PrepareOrderRequest(BaseModel):
     price: float
     order_type: str = "GTC"  # GTC, GTD, FOK, FAK
 
+    @field_validator("side")
+    @classmethod
+    def validate_side(cls, v: str) -> str:
+        if v not in _VALID_SIDES:
+            raise ValueError("side must be 'BUY' or 'SELL'")
+        return v
+
+    @field_validator("order_type")
+    @classmethod
+    def validate_order_type(cls, v: str) -> str:
+        if v not in _VALID_ORDER_TYPES:
+            raise ValueError(f"order_type must be one of {_VALID_ORDER_TYPES}")
+        return v
+
 
 class SubmitOrderRequest(BaseModel):
     signature: str  # EIP-712 Order signature (0x-prefixed hex)
     clob_order: ClobOrderPayload
     order_type: str = "GTC"  # GTC, GTD, FOK, FAK
+
+    @field_validator("order_type")
+    @classmethod
+    def validate_order_type(cls, v: str) -> str:
+        if v not in _VALID_ORDER_TYPES:
+            raise ValueError(f"order_type must be one of {_VALID_ORDER_TYPES}")
+        return v
 
 
 class OrderRequest(BaseModel):
@@ -298,6 +323,20 @@ class OrderRequest(BaseModel):
     price: float
     order_type: str = "GTC"  # GTC, GTD, FOK, FAK
     expiration: str | None = None  # For GTD orders
+
+    @field_validator("side")
+    @classmethod
+    def validate_side(cls, v: str) -> str:
+        if v not in _VALID_SIDES:
+            raise ValueError("side must be 'BUY' or 'SELL'")
+        return v
+
+    @field_validator("order_type")
+    @classmethod
+    def validate_order_type(cls, v: str) -> str:
+        if v not in _VALID_ORDER_TYPES:
+            raise ValueError(f"order_type must be one of {_VALID_ORDER_TYPES}")
+        return v
 
 
 class OrderResponse(BaseModel):
@@ -381,6 +420,20 @@ class BatchOrderItem(BaseModel):
     price: float
     order_type: str = "GTC"
 
+    @field_validator("side")
+    @classmethod
+    def validate_side(cls, v: str) -> str:
+        if v not in _VALID_SIDES:
+            raise ValueError("side must be 'BUY' or 'SELL'")
+        return v
+
+    @field_validator("order_type")
+    @classmethod
+    def validate_order_type(cls, v: str) -> str:
+        if v not in _VALID_ORDER_TYPES:
+            raise ValueError(f"order_type must be one of {_VALID_ORDER_TYPES}")
+        return v
+
 
 class PrepareBatchOrderRequest(BaseModel):
     orders: list[BatchOrderItem]  # 1-15 orders
@@ -391,12 +444,22 @@ class SubmitBatchOrderItem(BaseModel):
     clob_order: ClobOrderPayload
     order_type: str = "GTC"
 
+    @field_validator("order_type")
+    @classmethod
+    def validate_order_type(cls, v: str) -> str:
+        if v not in _VALID_ORDER_TYPES:
+            raise ValueError(f"order_type must be one of {_VALID_ORDER_TYPES}")
+        return v
+
 
 class SubmitBatchOrderRequest(BaseModel):
     orders: list[SubmitBatchOrderItem]  # 1-15 orders
 
 
 # === Trigger Models ===
+
+_VALID_TRIGGER_TYPES = {"stop_loss", "take_profit"}
+
 
 class PrepareTriggerRequest(BaseModel):
     token_id: str
@@ -406,6 +469,20 @@ class PrepareTriggerRequest(BaseModel):
     size: float
     exit_price: float
     expires_in_hours: float | None = None  # Optional TTL
+
+    @field_validator("exit_side")
+    @classmethod
+    def validate_exit_side(cls, v: str) -> str:
+        if v not in _VALID_SIDES:
+            raise ValueError("exit_side must be 'BUY' or 'SELL'")
+        return v
+
+    @field_validator("trigger_type")
+    @classmethod
+    def validate_trigger_type(cls, v: str) -> str:
+        if v not in _VALID_TRIGGER_TYPES:
+            raise ValueError("trigger_type must be 'stop_loss' or 'take_profit'")
+        return v
 
 
 class CreateTriggerRequest(BaseModel):
@@ -421,3 +498,24 @@ class CreateTriggerRequest(BaseModel):
     market_question: str | None = None
     market_outcome: str | None = None
     expires_in_hours: float | None = None
+
+    @field_validator("exit_side")
+    @classmethod
+    def validate_exit_side(cls, v: str) -> str:
+        if v not in _VALID_SIDES:
+            raise ValueError("exit_side must be 'BUY' or 'SELL'")
+        return v
+
+    @field_validator("trigger_type")
+    @classmethod
+    def validate_trigger_type(cls, v: str) -> str:
+        if v not in _VALID_TRIGGER_TYPES:
+            raise ValueError("trigger_type must be 'stop_loss' or 'take_profit'")
+        return v
+
+    @field_validator("order_type")
+    @classmethod
+    def validate_order_type(cls, v: str) -> str:
+        if v not in _VALID_ORDER_TYPES:
+            raise ValueError(f"order_type must be one of {_VALID_ORDER_TYPES}")
+        return v

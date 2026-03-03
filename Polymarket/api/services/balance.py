@@ -264,6 +264,17 @@ async def refund(wallet_address: str, amount: int, endpoint: str):
     addr = wallet_address.lower()
     db = await get_db()
     async with _write_lock:
+        # Check if refund would clip at zero (indicates a logic bug somewhere)
+        cursor = await db.execute(
+            "SELECT total_consumed FROM balances WHERE wallet_address = ?",
+            (addr,),
+        )
+        row = await cursor.fetchone()
+        if row and row[0] < amount:
+            logger.warning(
+                "Refund clip: %s refund=%d > consumed=%d on %s — possible over-refund bug",
+                addr[:10], amount, row[0], endpoint,
+            )
         await db.execute(
             """UPDATE balances SET total_consumed = MAX(0, total_consumed - ?)
                WHERE wallet_address = ?""",

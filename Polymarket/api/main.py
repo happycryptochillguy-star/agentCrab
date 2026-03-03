@@ -145,9 +145,11 @@ async def lifespan(app: FastAPI):
     await init_db()
 
     if not settings.l2_encryption_key:
-        logger.warning(
+        logger.critical(
             "L2_ENCRYPTION_KEY is not set! L2 credentials will be stored in PLAINTEXT. "
-            "Set L2_ENCRYPTION_KEY in .env for production."
+            "This is a CRITICAL security risk in production. "
+            "Generate a key with: python3 -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\" "
+            "and set L2_ENCRYPTION_KEY in .env."
         )
 
     # Start periodic sync loops

@@ -451,14 +451,16 @@ def _generate_salt() -> int:
 
 
 def _round_down(val: float, decimals: int) -> float:
-    """Truncate (floor) a float to N decimal places."""
-    factor = 10 ** decimals
-    return math.floor(val * factor) / factor
+    """Truncate (floor) a float to N decimal places (Decimal-safe)."""
+    from decimal import Decimal, ROUND_DOWN
+    d = Decimal(str(val))
+    return float(d.quantize(Decimal(10) ** -decimals, rounding=ROUND_DOWN))
 
 
 def _to_token_decimals(x: float) -> int:
-    """Convert human-readable amount to 6-decimal integer."""
-    return int(round(x * 10**6))
+    """Convert human-readable amount to 6-decimal integer (Decimal-safe)."""
+    from decimal import Decimal
+    return int(Decimal(str(x)) * 10**6)
 
 
 async def get_tick_size(token_id: str) -> str:

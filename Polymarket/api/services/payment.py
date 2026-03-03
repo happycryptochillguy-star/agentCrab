@@ -218,7 +218,17 @@ async def verify_direct_payment(tx_hash: str, wallet_address: str) -> bool:
             await db.commit()
         return False
     except Exception as e:
-        logger.warning("Direct payment verification failed: %s", e)
+        # Release the claim so user can retry — verification never completed
+        logger.warning("Direct payment verification failed (releasing claim): %s", e)
+        try:
+            db = await balance_svc.get_db()
+            async with balance_svc._write_lock:
+                await db.execute(
+                    "DELETE FROM used_tx_hashes WHERE tx_hash = ?", (tx_hash.lower(),)
+                )
+                await db.commit()
+        except Exception:
+            pass  # Best effort — don't mask the original error
         return False
 
 
@@ -233,21 +243,36 @@ def _get_on_chain_balance(wallet_address: str) -> int:
 async def sync_balance(wallet_address: str):
     """Sync on-chain deposit balance to off-chain DB for a single wallet.
 
-    Compares the contract's getBalance(wallet) with local total_deposited.
-    If on-chain is higher, credits the difference. This uses a simple view
-    call (no eth_getLogs) so it works with any RPC provider.
+    Uses atomic MAX(total_deposited, on_chain) to prevent TOCTOU double-credit:
+    concurrent calls for the same wallet are safe because MAX is idempotent.
     """
     try:
         on_chain = await asyncio.to_thread(_locked, _get_on_chain_balance, wallet_address)
-        local_deposited, _, _ = await balance_svc.get_remaining(wallet_address)
+        if on_chain <= 0:
+            return
 
-        if on_chain > local_deposited:
-            diff = on_chain - local_deposited
-            logger.info(
-                "Balance sync: %s on-chain=%s local=%s crediting=%s",
-                wallet_address[:10], on_chain, local_deposited, diff,
+        addr = wallet_address.lower()
+        db = await balance_svc.get_db()
+        async with balance_svc._write_lock:
+            cursor = await db.execute(
+                "SELECT total_deposited FROM balances WHERE wallet_address = ?",
+                (addr,),
             )
-            await balance_svc.credit_deposit(wallet_address, diff)
+            row = await cursor.fetchone()
+            local_deposited = row[0] if row else 0
+
+            if on_chain > local_deposited:
+                logger.info(
+                    "Balance sync: %s on-chain=%s local=%s crediting=%s",
+                    addr[:10], on_chain, local_deposited, on_chain - local_deposited,
+                )
+                await db.execute("""
+                    INSERT INTO balances (wallet_address, total_deposited, total_consumed)
+                    VALUES (?, ?, 0)
+                    ON CONFLICT(wallet_address)
+                    DO UPDATE SET total_deposited = MAX(total_deposited, ?)
+                """, (addr, on_chain, on_chain))
+                await db.commit()
     except Exception as e:
         logger.warning("Balance sync failed for %s: %s", wallet_address[:10], e)
 
@@ -257,11 +282,18 @@ async def sync_balance(wallet_address: str):
 _balance_cache: dict[str, tuple[int, float]] = {}  # addr -> (remaining_wei, timestamp)
 _BALANCE_CACHE_TTL = 30  # seconds
 _balance_locks: dict[str, asyncio.Lock] = {}  # per-wallet lock to prevent double-credit
+_MAX_BALANCE_LOCKS = 500  # evict stale locks to prevent unbounded growth
 
 
 def _get_balance_lock(addr: str) -> asyncio.Lock:
     """Get or create a per-wallet lock for balance operations."""
     if addr not in _balance_locks:
+        # Evict oldest entries if we have too many
+        if len(_balance_locks) >= _MAX_BALANCE_LOCKS:
+            # Remove half the entries (arbitrary eviction — all Locks are equivalent)
+            to_remove = list(_balance_locks.keys())[: _MAX_BALANCE_LOCKS // 2]
+            for k in to_remove:
+                _balance_locks.pop(k, None)
         _balance_locks[addr] = asyncio.Lock()
     return _balance_locks[addr]
 
