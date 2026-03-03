@@ -1,0 +1,15 @@
+[Unit]
+Description=agentCrab MCP Server (Streamable HTTP)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Environment=AGENTCRAB_API_URL=https://api.agentcrab.ai/polymarket
+ExecStart=/data/agentCrab/Polymarket/.venv/bin/python -m agentcrab --transport streamable-http --host 127.0.0.1 --port 8001
+Restart=always
+RestartSec=5
+WorkingDirectory=/data/agentCrab
+
+[Install]
+WantedBy=multi-user.target
