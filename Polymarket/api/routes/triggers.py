@@ -133,7 +133,7 @@ async def create_trigger(
             trigger_type=req.trigger_type,
             trigger_price=req.trigger_price,
             exit_side=req.exit_side,
-            clob_order=req.clob_order,
+            clob_order=req.clob_order.model_dump(),
             signature=req.signature,
             order_type=req.order_type,
             l2_api_key=creds["api_key"],

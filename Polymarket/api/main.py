@@ -19,8 +19,17 @@ from api.services import category_leaderboard as cat_lb_svc
 from api.services import health as health_svc
 from api.services import triggers as trigger_svc
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+logging.basicConfig(
+    level=getattr(logging, settings.log_level.upper(), logging.INFO),
+    format="%(asctime)s %(name)s %(levelname)s %(message)s",
+)
 logger = logging.getLogger("agentcrab")
+
+# Relayer module handles Builder HMAC credentials — suppress DEBUG logs
+# that could leak sensitive headers to stdout/log files.
+logging.getLogger("agentcrab.relayer").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 # === Tiered Rate Limiter ===

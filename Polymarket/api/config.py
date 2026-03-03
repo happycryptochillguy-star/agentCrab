@@ -59,8 +59,15 @@ class Settings(BaseSettings):
     # Bark push notifications (iOS)
     bark_url: str = ""  # e.g. https://api.day.app/YOUR_KEY
 
+    # Encryption key for L2 credentials at rest (Fernet, base64-encoded 32 bytes)
+    # Generate with: python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    l2_encryption_key: str = ""
+
     # Admin
     admin_key: str = ""
+
+    # Logging
+    log_level: str = "INFO"  # DEBUG, INFO, WARNING, ERROR
 
     # SDK version control
     min_sdk_version: str = "0.1.0"

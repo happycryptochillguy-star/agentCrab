@@ -15,6 +15,13 @@ _ETH_ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
 logger = logging.getLogger("agentcrab.payment")
 
+# === Signature Replay Prevention ===
+# Track used signatures to prevent replay within the 5-minute validity window.
+# Bounded dict: signature_hex -> expiry_timestamp. Cleaned up periodically.
+_used_signatures: dict[str, float] = {}
+_SIG_CLEANUP_INTERVAL = 60  # seconds
+_sig_last_cleanup = 0.0
+
 # ABI fragments we need
 PAYMENT_ABI = json.loads("""[
     {"anonymous":false,"inputs":[{"indexed":true,"name":"user","type":"address"},{"indexed":false,"name":"amount","type":"uint256"}],"name":"Deposited","type":"event"},
@@ -102,10 +109,9 @@ def is_valid_address(address: str) -> bool:
 def verify_signature(wallet_address: str, message: str, signature: str) -> bool:
     """Verify EIP-191 personal_sign. Message format: 'agentcrab:{unix_timestamp}'.
 
-    NOTE: This is intentionally synchronous — eth_account.recover_message is CPU-only
-    (no network I/O), so it's fast enough to call inline. The w3.eth.account object
-    is only used for its recover_message method, not for RPC calls.
+    Includes replay prevention: each signature can only be used once.
     """
+    global _sig_last_cleanup
     try:
         if not is_valid_address(wallet_address):
             return False
@@ -115,14 +121,34 @@ def verify_signature(wallet_address: str, message: str, signature: str) -> bool:
             return False
 
         ts = int(parts[1])
-        if abs(time.time() - ts) > settings.signature_max_age_seconds:
+        now = time.time()
+        if abs(now - ts) > settings.signature_max_age_seconds:
+            return False
+
+        # Replay check: reject if this exact signature was already used
+        sig_lower = signature.lower()
+        if sig_lower in _used_signatures:
+            logger.warning("Rejected replayed signature from %s", wallet_address[:10])
             return False
 
         # Recover signer (CPU-only, no RPC)
         w3 = get_w3()
         msg = encode_defunct(text=message)
         recovered = w3.eth.account.recover_message(msg, signature=signature)
-        return recovered.lower() == wallet_address.lower()
+        if recovered.lower() != wallet_address.lower():
+            return False
+
+        # Mark signature as used (expires when timestamp goes stale)
+        _used_signatures[sig_lower] = ts + settings.signature_max_age_seconds
+
+        # Periodic cleanup of expired signatures
+        if now - _sig_last_cleanup > _SIG_CLEANUP_INTERVAL:
+            _sig_last_cleanup = now
+            expired = [k for k, exp in _used_signatures.items() if now > exp]
+            for k in expired:
+                del _used_signatures[k]
+
+        return True
     except Exception as e:
         logger.warning("Signature verification failed: %s", e)
         return False
@@ -500,6 +526,81 @@ def build_polygon_usdc_transfer_tx(
         "description": f"Transfer USDC.e to Safe {to_address[:10]}...",
         "transaction": transfer_tx,
     }]
+
+
+# === Transaction Target Whitelist ===
+# Only allow broadcasting transactions to known contracts.
+# Prevents abuse of our RPC endpoint as a free relay.
+
+# BSC deposit contract (Polymarket via fun.xyz)
+BSC_DEPOSIT_CONTRACT = "0x4cD00E387622C35bDDB9b4c962C136462338BC31"
+
+_BSC_WHITELIST: set[str] | None = None
+_POLYGON_WHITELIST: set[str] = {
+    w.lower() for w in [
+        "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",  # USDC.e
+        POLYGON_CTF,
+        POLYGON_CTF_EXCHANGE,
+        POLYGON_NEG_RISK_CTF_EXCHANGE,
+        POLYGON_NEG_RISK_ADAPTER,
+        "0xA238CBeb142c10Ef7Ad8442C6D1f9E89e07e7761",  # MultiSend
+        "0xaacFeEa03eb1561C4e67d661e40682Bd20E3541b",  # SafeProxyFactory
+    ]
+}
+
+
+def _get_bsc_whitelist() -> set[str]:
+    """Lazily build BSC whitelist (needs settings loaded)."""
+    global _BSC_WHITELIST
+    if _BSC_WHITELIST is None:
+        _BSC_WHITELIST = {
+            w.lower() for w in [
+                settings.contract_address,  # agentCrab payment contract
+                settings.usdt_address,       # BSC USDT
+                BSC_DEPOSIT_CONTRACT,        # Polymarket deposit via fun.xyz
+            ] if w
+        }
+    return _BSC_WHITELIST
+
+
+def extract_to_from_raw_tx(raw_hex: str) -> str | None:
+    """Extract the 'to' address from a signed raw transaction.
+
+    Supports legacy, EIP-2930 (type 1), and EIP-1559 (type 2) transactions.
+    """
+    import rlp
+    try:
+        raw = bytes.fromhex(raw_hex.removeprefix("0x"))
+        if raw[0] <= 0x7f:
+            # EIP-2718 typed transaction
+            payload = rlp.decode(raw[1:])
+            if raw[0] == 0x01:
+                to_bytes = payload[4]  # EIP-2930
+            elif raw[0] == 0x02:
+                to_bytes = payload[5]  # EIP-1559
+            else:
+                return None
+        else:
+            # Legacy transaction
+            payload = rlp.decode(raw)
+            to_bytes = payload[3]
+
+        if not to_bytes or len(to_bytes) != 20:
+            return None
+        return "0x" + to_bytes.hex()
+    except Exception:
+        return None
+
+
+def validate_tx_target(raw_hex: str, chain: str) -> bool:
+    """Check if a raw transaction targets a whitelisted contract."""
+    to_addr = extract_to_from_raw_tx(raw_hex)
+    if to_addr is None:
+        return False
+    to_lower = to_addr.lower()
+    if chain == "polygon":
+        return to_lower in _POLYGON_WHITELIST
+    return to_lower in _get_bsc_whitelist()
 
 
 def _broadcast_signed_tx_sync(signed_raw_tx: str, chain: str = "bsc") -> str:

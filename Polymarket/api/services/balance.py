@@ -291,15 +291,50 @@ def calls_remaining(remaining_wei: int) -> int:
     return remaining_wei // settings.payment_amount_wei
 
 
-# === L2 Credentials Cache ===
+# === L2 Credentials Cache (encrypted at rest) ===
+
+
+def _get_fernet():
+    """Get Fernet cipher for encrypting L2 credentials. Returns None if no key configured."""
+    key = settings.l2_encryption_key
+    if not key:
+        return None
+    try:
+        from cryptography.fernet import Fernet
+        return Fernet(key.encode() if isinstance(key, str) else key)
+    except Exception:
+        return None
+
+
+def _encrypt(value: str) -> str:
+    """Encrypt a string if encryption key is available, otherwise return as-is."""
+    f = _get_fernet()
+    if f is None:
+        return value
+    return f.encrypt(value.encode()).decode()
+
+
+def _decrypt(value: str) -> str:
+    """Decrypt a string if encryption key is available, otherwise return as-is."""
+    f = _get_fernet()
+    if f is None:
+        return value
+    try:
+        return f.decrypt(value.encode()).decode()
+    except Exception:
+        # Likely stored before encryption was enabled — return raw
+        return value
 
 
 async def save_l2_credentials(
     wallet_address: str, api_key: str, secret: str, passphrase: str,
 ):
-    """Save or update L2 credentials for a wallet."""
+    """Save or update L2 credentials for a wallet (encrypted at rest)."""
     addr = wallet_address.lower()
     now = time.time()
+    enc_key = _encrypt(api_key)
+    enc_secret = _encrypt(secret)
+    enc_pass = _encrypt(passphrase)
     db = await get_db()
     async with _write_lock:
         await db.execute(
@@ -307,14 +342,14 @@ async def save_l2_credentials(
                VALUES (?, ?, ?, ?, ?, ?)
                ON CONFLICT(wallet_address)
                DO UPDATE SET api_key = ?, secret = ?, passphrase = ?, updated_at = ?""",
-            (addr, api_key, secret, passphrase, now, now,
-             api_key, secret, passphrase, now),
+            (addr, enc_key, enc_secret, enc_pass, now, now,
+             enc_key, enc_secret, enc_pass, now),
         )
         await db.commit()
 
 
 async def get_l2_credentials(wallet_address: str) -> dict | None:
-    """Get cached L2 credentials for a wallet. Returns None if not cached."""
+    """Get cached L2 credentials for a wallet (decrypted). Returns None if not cached."""
     addr = wallet_address.lower()
     db = await get_db()
     rows = await db.execute_fetchall(
@@ -324,4 +359,8 @@ async def get_l2_credentials(wallet_address: str) -> dict | None:
     if not rows:
         return None
     api_key, secret, passphrase = rows[0]
-    return {"api_key": api_key, "secret": secret, "passphrase": passphrase}
+    return {
+        "api_key": _decrypt(api_key),
+        "secret": _decrypt(secret),
+        "passphrase": _decrypt(passphrase),
+    }

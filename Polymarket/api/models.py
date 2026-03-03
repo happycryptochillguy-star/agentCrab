@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator, ConfigDict
 
 
 # === API Response Wrappers ===
@@ -214,9 +214,67 @@ class SubmitDeploySafeRequest(BaseModel):
     signature: str  # EIP-712 CreateProxy signature (0x-prefixed hex)
 
 
+class ApprovalData(BaseModel):
+    """Strict model for approval_data from prepare-enable. Prevents injection."""
+    model_config = ConfigDict(extra="forbid")
+    hash: str
+    safe_address: str
+    nonce: int
+    to: str
+    data: str
+    operation: int
+    approvals: list[str]
+
+    @field_validator("to")
+    @classmethod
+    def validate_to_is_multisend(cls, v: str) -> str:
+        # MultiSend address on Polygon — only valid target for approval txs
+        if v.lower() != "0xa238cbeb142c10ef7ad8442c6d1f9e89e07e7761":
+            raise ValueError("approval_data.to must be the MultiSend contract address")
+        return v
+
+    @field_validator("operation")
+    @classmethod
+    def validate_operation(cls, v: int) -> int:
+        if v != 1:  # DelegateCall for MultiSend
+            raise ValueError("approval_data.operation must be 1 (DelegateCall)")
+        return v
+
+
 class SubmitApprovalsRequest(BaseModel):
     signature: str  # personal_sign of SafeTx hash (0x-prefixed hex)
-    approval_data: dict  # The approval_data object from prepare-enable
+    approval_data: ApprovalData
+
+
+class ClobOrderPayload(BaseModel):
+    """Strict model for CLOB order body. Matches Polymarket SDK exactly."""
+    model_config = ConfigDict(extra="forbid")
+    salt: int
+    maker: str
+    signer: str
+    taker: str
+    tokenId: str
+    makerAmount: str
+    takerAmount: str
+    expiration: str
+    nonce: str
+    feeRateBps: str
+    side: str
+    signatureType: int
+
+    @field_validator("side")
+    @classmethod
+    def validate_side(cls, v: str) -> str:
+        if v not in ("BUY", "SELL"):
+            raise ValueError("side must be 'BUY' or 'SELL'")
+        return v
+
+    @field_validator("signatureType")
+    @classmethod
+    def validate_sig_type(cls, v: int) -> int:
+        if v != 2:  # POLY_GNOSIS_SAFE
+            raise ValueError("signatureType must be 2 (POLY_GNOSIS_SAFE)")
+        return v
 
 
 class PrepareOrderRequest(BaseModel):
@@ -229,7 +287,7 @@ class PrepareOrderRequest(BaseModel):
 
 class SubmitOrderRequest(BaseModel):
     signature: str  # EIP-712 Order signature (0x-prefixed hex)
-    clob_order: dict  # The clob_order object from prepare-order
+    clob_order: ClobOrderPayload
     order_type: str = "GTC"  # GTC, GTD, FOK, FAK
 
 
@@ -330,7 +388,7 @@ class PrepareBatchOrderRequest(BaseModel):
 
 class SubmitBatchOrderItem(BaseModel):
     signature: str  # EIP-712 Order signature (0x-prefixed hex)
-    clob_order: dict  # The clob_order object from prepare-batch-order
+    clob_order: ClobOrderPayload
     order_type: str = "GTC"
 
 
@@ -352,7 +410,7 @@ class PrepareTriggerRequest(BaseModel):
 
 class CreateTriggerRequest(BaseModel):
     signature: str  # EIP-712 Order signature
-    clob_order: dict
+    clob_order: ClobOrderPayload
     order_type: str = "GTC"
     token_id: str
     trigger_type: str  # stop_loss or take_profit

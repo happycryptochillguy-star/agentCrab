@@ -202,6 +202,18 @@ async def submit_tx(
             ).model_dump(),
         )
 
+    # Validate all tx targets against whitelist
+    all_txs = req.signed_txs or ([req.signed_tx] if req.signed_tx else [])
+    for i, raw_tx in enumerate(all_txs):
+        if not payment_svc.validate_tx_target(raw_tx, req.chain):
+            raise HTTPException(
+                status_code=400,
+                detail=ErrorResponse(
+                    error_code="INVALID_TX_TARGET",
+                    message=f"Transaction {i} targets an unknown contract. Only agentCrab and Polymarket contracts are allowed.",
+                ).model_dump(),
+            )
+
     # Batch mode
     if req.signed_txs:
         try:

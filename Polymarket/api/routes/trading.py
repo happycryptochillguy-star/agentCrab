@@ -315,7 +315,7 @@ async def submit_approvals(
     """
     try:
         result = await relayer_svc.submit_approvals(
-            wallet_address, req.signature, req.approval_data,
+            wallet_address, req.signature, req.approval_data.model_dump(),
         )
     except Exception as e:
         logger.exception("Failed to submit approvals via relayer for %s", wallet_address)
@@ -582,7 +582,7 @@ async def submit_order(
     """
     try:
         result = await clob_svc.post_signed_order(
-            clob_order=req.clob_order,
+            clob_order=req.clob_order.model_dump(),
             signature=req.signature,
             order_type=req.order_type,
             api_key=creds["api_key"],
@@ -790,7 +790,7 @@ async def submit_batch_order(
     # Submit orders
     signed_items = [
         {
-            "clob_order": o.clob_order,
+            "clob_order": o.clob_order.model_dump(),
             "signature": o.signature,
             "order_type": o.order_type,
         }
