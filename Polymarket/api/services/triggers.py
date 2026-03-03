@@ -10,7 +10,7 @@ import logging
 import time
 import uuid
 
-from api.services.balance import get_db, _write_lock
+from api.services.balance import get_db, _write_lock, _encrypt, _decrypt
 from api.services import clob as clob_svc
 
 logger = logging.getLogger("agentcrab.triggers")
@@ -68,9 +68,9 @@ async def create_trigger(
                 json.dumps(clob_order),
                 signature,
                 order_type,
-                l2_api_key,
-                l2_secret,
-                l2_passphrase,
+                _encrypt(l2_api_key),
+                _encrypt(l2_secret),
+                _encrypt(l2_passphrase),
                 str(size) if size else None,
                 str(price) if price else None,
                 market_question,
@@ -211,9 +211,9 @@ async def _execute_trigger(trigger: dict) -> dict:
         clob_order=clob_order,
         signature=trigger["signature"],
         order_type=trigger["order_type"],
-        api_key=trigger["l2_api_key"],
-        secret=trigger["l2_secret"],
-        passphrase=trigger["l2_passphrase"],
+        api_key=_decrypt(trigger["l2_api_key"]),
+        secret=_decrypt(trigger["l2_secret"]),
+        passphrase=_decrypt(trigger["l2_passphrase"]),
         eoa_address=trigger["wallet_address"],
     )
 

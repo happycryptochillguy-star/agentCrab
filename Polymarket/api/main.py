@@ -140,6 +140,12 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing database...")
     await init_db()
 
+    if not settings.l2_encryption_key:
+        logger.warning(
+            "L2_ENCRYPTION_KEY is not set! L2 credentials will be stored in PLAINTEXT. "
+            "Set L2_ENCRYPTION_KEY in .env for production."
+        )
+
     # Start periodic sync loops
     history_task = asyncio.create_task(_history_sync_loop())
     logger.info("Historical events sync loop started")
@@ -256,11 +262,11 @@ app.add_middleware(
 
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
-    # Use X-Real-IP (set by nginx) or X-Forwarded-For behind reverse proxy,
-    # fall back to direct client IP for local development.
+    # Only trust X-Real-IP (set by nginx via proxy_set_header X-Real-IP $remote_addr).
+    # Do NOT trust X-Forwarded-For — it can be spoofed by clients.
+    # Fall back to direct client IP for local development.
     client_ip = (
         request.headers.get("X-Real-IP")
-        or (request.headers.get("X-Forwarded-For", "").split(",")[0].strip())
         or (request.client.host if request.client else "unknown")
     )
     path = request.url.path
