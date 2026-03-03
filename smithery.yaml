@@ -2,12 +2,10 @@ startCommand:
   type: stdio
   configSchema:
     type: object
-    required:
-      - privateKey
     properties:
       privateKey:
         type: string
-        description: "Your Ethereum private key for signing transactions (0x...)"
+        description: "Optional. Your Ethereum private key (0x...). If not set, use connect_wallet or create_wallet tools after starting."
       apiUrl:
         type: string
         description: "agentCrab API URL (default: https://api.agentcrab.ai/polymarket)"
@@ -15,10 +13,9 @@ startCommand:
     (config) => ({
       command: 'agentcrab-mcp',
       env: {
-        AGENTCRAB_PRIVATE_KEY: config.privateKey,
+        ...(config.privateKey ? { AGENTCRAB_PRIVATE_KEY: config.privateKey } : {}),
         ...(config.apiUrl ? { AGENTCRAB_API_URL: config.apiUrl } : {})
       }
     })
   exampleConfig:
-    privateKey: "0x..."
     apiUrl: "https://api.agentcrab.ai/polymarket"

@@ -66,11 +66,16 @@ def create_server():
             "agentCrab gives you full access to Polymarket prediction markets. "
             "You can search markets, check prices, buy/sell shares, manage positions, "
             "set stop-loss/take-profit triggers, and view leaderboards. "
-            "Trading calls auto-setup on first use (Safe deploy + approvals + credentials). "
-            "Most calls cost 0.01 USDT from your prepaid balance."
+            "Before using any tool, check if a wallet is connected. If not, ask the user "
+            "whether they have an existing private key (use connect_wallet) or want to "
+            "create a new one (use create_wallet). Never call other tools before a wallet "
+            "is connected."
         ),
     )
 
+    _api_url = os.environ.get(
+        "AGENTCRAB_API_URL", "https://api.agentcrab.ai/polymarket"
+    )
     _client_instance: list[AgentCrab] = []
 
     def _cleanup() -> None:
@@ -80,21 +85,81 @@ def create_server():
 
     atexit.register(_cleanup)
 
+    def _init_client(private_key: str) -> AgentCrab:
+        """Initialize (or replace) the SDK client with a private key."""
+        if _client_instance:
+            _client_instance[0].close()
+            _client_instance.clear()
+        client = AgentCrab(_api_url, private_key)
+        _client_instance.append(client)
+        log.info("client initialized, wallet=%s", client.address)
+        return client
+
+    # Auto-connect if env var is set (for pre-configured setups)
+    _auto_key = os.environ.get("AGENTCRAB_PRIVATE_KEY", "")
+    if _auto_key:
+        _init_client(_auto_key)
+
     def _get_client() -> AgentCrab:
         if not _client_instance:
-            api_url = os.environ.get(
-                "AGENTCRAB_API_URL", "https://api.agentcrab.ai/polymarket"
-            )
-            private_key = os.environ.get("AGENTCRAB_PRIVATE_KEY", "")
-            if not private_key:
-                raise RuntimeError(
-                    "AGENTCRAB_PRIVATE_KEY environment variable is required. "
-                    "Set it to your Ethereum private key (0x...)."
-                )
-            client = AgentCrab(api_url, private_key)
-            _client_instance.append(client)
-            log.info("client initialized, wallet=%s", client.address)
+            return None  # type: ignore[return-value]
         return _client_instance[0]
+
+    _NOT_CONNECTED = json.dumps({
+        "error": "WALLET_NOT_CONNECTED",
+        "message": "No wallet connected. Use connect_wallet with your private key, or create_wallet to create a new one.",
+    })
+
+    def _require_client() -> AgentCrab | None:
+        """Return client or None. Caller should check and return _NOT_CONNECTED."""
+        return _get_client()
+
+    # ------------------------------------------------------------------
+    # Wallet Setup
+    # ------------------------------------------------------------------
+
+    @mcp.tool()
+    def connect_wallet(private_key: str) -> str:
+        """Connect your existing wallet by providing your private key.
+
+        The private key stays local — it is only used to sign transactions
+        on your machine and is never sent to any server.
+
+        Args:
+            private_key: Your Ethereum private key (0x...)
+        """
+        try:
+            client = _init_client(private_key)
+            return json.dumps({
+                "status": "connected",
+                "wallet_address": client.address,
+                "message": "Wallet connected. You can now search markets, trade, and more.",
+            })
+        except Exception as e:
+            return _error(e, "connect_wallet")
+
+    @mcp.tool()
+    def create_wallet() -> str:
+        """Create a brand new wallet. Returns the address and private key.
+
+        The wallet works on both BSC (for payments) and Polygon (for trading).
+        After creation, the wallet needs to be funded with USDT + BNB on BSC.
+        The wallet is automatically connected after creation.
+        """
+        try:
+            result = AgentCrab.create_wallet(_api_url)
+            pk = result.get("private_key", "")
+            if pk:
+                client = _init_client(pk)
+                result["status"] = "created_and_connected"
+                result["wallet_address"] = client.address
+                result["next_steps"] = (
+                    "Fund this wallet with USDT and a small amount of BNB on BSC "
+                    "for gas fees. Then use deposit() to add API credits."
+                )
+            return json.dumps(result, indent=2)
+        except Exception as e:
+            return _error(e, "create_wallet")
 
     # ------------------------------------------------------------------
     # Discovery & Balance (free)
@@ -107,8 +172,11 @@ def create_server():
         Returns calls remaining, USDT balance, Safe address, and USDC trading balance.
         Free — no charge for this call.
         """
+        client = _get_client()
+        if not client:
+            return _NOT_CONNECTED
         try:
-            return _serialize(_get_client().get_balance())
+            return _serialize(client.get_balance())
         except Exception as e:
             return _error(e, "get_balance")
 
@@ -120,8 +188,11 @@ def create_server():
         Use these as the 'category' filter in search_markets or browse_markets.
         Free — no charge for this call.
         """
+        client = _get_client()
+        if not client:
+            return _NOT_CONNECTED
         try:
-            return _serialize(_get_client().get_categories())
+            return _serialize(client.get_categories())
         except Exception as e:
             return _error(e, "get_categories")
 
@@ -132,8 +203,11 @@ def create_server():
         Returns current onboarding status and next_step recommendation.
         Free — no charge for this call.
         """
+        client = _get_client()
+        if not client:
+            return _NOT_CONNECTED
         try:
-            return _serialize(_get_client().get_trading_status())
+            return _serialize(client.get_trading_status())
         except Exception as e:
             return _error(e, "get_trading_status")
 
@@ -157,8 +231,11 @@ def create_server():
             category: Optional category filter (e.g. "crypto", "sports")
             limit: Max results (default 10)
         """
+        client = _get_client()
+        if not client:
+            return _NOT_CONNECTED
         try:
-            markets = _get_client().search(query, category=category, limit=limit)
+            markets = client.search(query, category=category, limit=limit)
             return _serialize(markets)
         except Exception as e:
             return _error(e, "search_markets")
@@ -179,10 +256,12 @@ def create_server():
             mood: Market mood — "trending", "new", or "closing_soon"
             limit: Max results (default 10)
         """
+        client = _get_client()
+        if not client:
+            return _NOT_CONNECTED
         try:
-            # SDK requires at least one of category/mood to be non-empty
             effective_mood = mood if mood else "trending"
-            markets = _get_client().browse(
+            markets = client.browse(
                 category=category or None, mood=effective_mood, limit=limit
             )
             return _serialize(markets)
@@ -198,8 +277,11 @@ def create_server():
         Args:
             event_id: The event ID from search results
         """
+        client = _get_client()
+        if not client:
+            return _NOT_CONNECTED
         try:
-            return _serialize(_get_client().get_event(event_id))
+            return _serialize(client.get_event(event_id))
         except Exception as e:
             return _error(e, "get_event")
 
@@ -224,8 +306,11 @@ def create_server():
             min_price: Minimum outcome price (default 0.10)
             max_price: Maximum outcome price (default 0.90)
         """
+        client = _get_client()
+        if not client:
+            return _NOT_CONNECTED
         try:
-            market, outcome, orderbook = _get_client().find_tradeable(
+            market, outcome, orderbook = client.find_tradeable(
                 query=query,
                 category=category,
                 mood=mood,
@@ -256,8 +341,11 @@ def create_server():
         Args:
             token_id: The token ID from market outcomes
         """
+        client = _get_client()
+        if not client:
+            return _NOT_CONNECTED
         try:
-            return _serialize(_get_client().get_price(token_id))
+            return _serialize(client.get_price(token_id))
         except Exception as e:
             return _error(e, "get_price")
 
@@ -271,8 +359,11 @@ def create_server():
         Args:
             token_id: The token ID from market outcomes
         """
+        client = _get_client()
+        if not client:
+            return _NOT_CONNECTED
         try:
-            return _serialize(_get_client().get_orderbook(token_id))
+            return _serialize(client.get_orderbook(token_id))
         except Exception as e:
             return _error(e, "get_orderbook")
 
@@ -292,9 +383,12 @@ def create_server():
             size: Number of shares to buy
             price: Price per share (0.001 to 0.999)
         """
+        client = _get_client()
+        if not client:
+            return _NOT_CONNECTED
         try:
             log.info("buy token=%s size=%s price=%s", token_id[:12], size, price)
-            return _serialize(_get_client().buy(token_id, size, price))
+            return _serialize(client.buy(token_id, size, price))
         except Exception as e:
             return _error(e, "buy")
 
@@ -309,9 +403,12 @@ def create_server():
             size: Number of shares to sell
             price: Price per share (0.001 to 0.999)
         """
+        client = _get_client()
+        if not client:
+            return _NOT_CONNECTED
         try:
             log.info("sell token=%s size=%s price=%s", token_id[:12], size, price)
-            return _serialize(_get_client().sell(token_id, size, price))
+            return _serialize(client.sell(token_id, size, price))
         except Exception as e:
             return _error(e, "sell")
 
@@ -322,24 +419,33 @@ def create_server():
         Args:
             order_id: The order ID to cancel
         """
+        client = _get_client()
+        if not client:
+            return _NOT_CONNECTED
         try:
-            return _serialize(_get_client().cancel_order(order_id))
+            return _serialize(client.cancel_order(order_id))
         except Exception as e:
             return _error(e, "cancel_order")
 
     @mcp.tool()
     def cancel_all_orders() -> str:
         """Cancel all your open orders. Costs 0.01 USDT."""
+        client = _get_client()
+        if not client:
+            return _NOT_CONNECTED
         try:
-            return _serialize(_get_client().cancel_all_orders())
+            return _serialize(client.cancel_all_orders())
         except Exception as e:
             return _error(e, "cancel_all_orders")
 
     @mcp.tool()
     def get_open_orders() -> str:
         """List your open orders on Polymarket. Costs 0.01 USDT."""
+        client = _get_client()
+        if not client:
+            return _NOT_CONNECTED
         try:
-            return _serialize(_get_client().get_open_orders())
+            return _serialize(client.get_open_orders())
         except Exception as e:
             return _error(e, "get_open_orders")
 
@@ -366,9 +472,12 @@ def create_server():
             exit_price: Limit price for the exit order
             expires_in_hours: Optional expiry in hours (default: no expiry)
         """
+        client = _get_client()
+        if not client:
+            return _NOT_CONNECTED
         try:
             return _serialize(
-                _get_client().set_stop_loss(
+                client.set_stop_loss(
                     token_id,
                     trigger_price,
                     size,
@@ -398,9 +507,12 @@ def create_server():
             exit_price: Limit price for the exit order
             expires_in_hours: Optional expiry in hours (default: no expiry)
         """
+        client = _get_client()
+        if not client:
+            return _NOT_CONNECTED
         try:
             return _serialize(
-                _get_client().set_take_profit(
+                client.set_take_profit(
                     token_id,
                     trigger_price,
                     size,
@@ -414,8 +526,11 @@ def create_server():
     @mcp.tool()
     def get_triggers() -> str:
         """List your active stop loss and take profit triggers. Free."""
+        client = _get_client()
+        if not client:
+            return _NOT_CONNECTED
         try:
-            return _serialize(_get_client().get_triggers())
+            return _serialize(client.get_triggers())
         except Exception as e:
             return _error(e, "get_triggers")
 
@@ -426,8 +541,11 @@ def create_server():
         Args:
             trigger_id: The trigger ID to cancel
         """
+        client = _get_client()
+        if not client:
+            return _NOT_CONNECTED
         try:
-            return _serialize(_get_client().cancel_trigger(trigger_id))
+            return _serialize(client.cancel_trigger(trigger_id))
         except Exception as e:
             return _error(e, "cancel_trigger")
 
@@ -442,8 +560,11 @@ def create_server():
         Returns token_id, outcome, size, avg_price, current_price, pnl.
         Costs 0.01 USDT.
         """
+        client = _get_client()
+        if not client:
+            return _NOT_CONNECTED
         try:
-            return _serialize(_get_client().get_positions())
+            return _serialize(client.get_positions())
         except Exception as e:
             return _error(e, "get_positions")
 
@@ -454,8 +575,11 @@ def create_server():
         Args:
             limit: Max trades to return (default 20)
         """
+        client = _get_client()
+        if not client:
+            return _NOT_CONNECTED
         try:
-            return _serialize(_get_client().get_trades(limit=limit))
+            return _serialize(client.get_trades(limit=limit))
         except Exception as e:
             return _error(e, "get_trades")
 
@@ -466,8 +590,11 @@ def create_server():
         Args:
             limit: Number of top traders (default 20)
         """
+        client = _get_client()
+        if not client:
+            return _NOT_CONNECTED
         try:
-            return _serialize(_get_client().get_leaderboard(limit=limit))
+            return _serialize(client.get_leaderboard(limit=limit))
         except Exception as e:
             return _error(e, "get_leaderboard")
 
@@ -479,9 +606,12 @@ def create_server():
             category: Category slug (e.g. "crypto", "sports.nba")
             limit: Number of top traders (default 20)
         """
+        client = _get_client()
+        if not client:
+            return _NOT_CONNECTED
         try:
             return _serialize(
-                _get_client().get_category_leaderboard(category, limit=limit)
+                client.get_category_leaderboard(category, limit=limit)
             )
         except Exception as e:
             return _error(e, "get_category_leaderboard")
@@ -500,9 +630,12 @@ def create_server():
         Args:
             amount_usdt: Amount of USDT to deposit
         """
+        client = _get_client()
+        if not client:
+            return _NOT_CONNECTED
         try:
             log.info("deposit amount=%s USDT", amount_usdt)
-            return _serialize(_get_client().deposit(amount_usdt))
+            return _serialize(client.deposit(amount_usdt))
         except Exception as e:
             return _error(e, "deposit")
 
@@ -516,9 +649,12 @@ def create_server():
         Args:
             amount_usdt: Amount of USDT to deposit to Polymarket
         """
+        client = _get_client()
+        if not client:
+            return _NOT_CONNECTED
         try:
             log.info("deposit_to_polymarket amount=%s USDT", amount_usdt)
-            return _serialize(_get_client().deposit_to_polymarket(amount_usdt))
+            return _serialize(client.deposit_to_polymarket(amount_usdt))
         except Exception as e:
             return _error(e, "deposit_to_polymarket")
 
