@@ -121,6 +121,7 @@ async def reload_config(
         "bsc_rpc_url", "polygon_rpc_url",  # contain Alchemy API key
         "relayer_url", "bridge_api_url",
         "bark_url",
+        "l2_encryption_key", "l2_encryption_key_old",
     }
 
     safe_changes: dict[str, dict] = {}

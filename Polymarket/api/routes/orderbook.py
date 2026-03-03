@@ -21,6 +21,7 @@ def _simplify_orderbook(book: Orderbook) -> dict:
         "token_id": book.token_id,
         "best_bid": book.best_bid,
         "best_ask": book.best_ask,
+        "midpoint": book.midpoint,
         "spread": book.spread,
         "bids": [{"price": b.price, "size": b.size} for b in book.bids[:MAX_LEVELS]],
         "asks": [{"price": a.price, "size": a.size} for a in book.asks[:MAX_LEVELS]],

@@ -9,7 +9,7 @@ logger = logging.getLogger("agentcrab")
 
 from web3 import Web3
 
-from api.auth import verify_auth_and_payment
+from api.auth import verify_auth_and_payment, verify_auth_only
 from api.models import (
     SuccessResponse,
     ErrorResponse,
@@ -105,7 +105,7 @@ async def create_withdraw(
 @router.post("/prepare-transfer")
 async def prepare_transfer(
     req: PreparePolymarketDepositRequest,
-    wallet_address: str = Depends(verify_auth_and_payment),
+    wallet_address: str = Depends(verify_auth_only),
 ):
     """One-step Polymarket deposit via fun.xyz relay.
 
@@ -113,12 +113,12 @@ async def prepare_transfer(
     2. Calls fun.xyz quoteV2 — returns pre-built approve + depositErc20 txs
     3. Agent signs and submits — relay delivers USDC.e to Safe on Polygon
     """
-    if req.amount_usdt <= 0:
+    if req.amount_usdt < 0.01:
         raise HTTPException(
             status_code=400,
             detail=ErrorResponse(
                 error_code="INVALID_AMOUNT",
-                message="amount_usdt must be greater than 0.",
+                message="amount_usdt must be at least 0.01.",
             ).model_dump(),
         )
 
@@ -198,7 +198,7 @@ async def prepare_transfer(
             _nonce += 1
         return _txs
 
-    transactions = await asyncio.to_thread(_build_txs_sync)
+    transactions = await asyncio.to_thread(payment_svc._locked, _build_txs_sync)
 
     est_total = quote.get("estTotalFromAmount", "?")
     est_fees = quote.get("estFeesUsd", 0)

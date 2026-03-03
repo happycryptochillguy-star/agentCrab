@@ -54,10 +54,63 @@ async def get_balance(
     return SuccessResponse(
         summary=summary,
         data={
+            "wallet_address": wallet_address,
             "calls_remaining": calls,
             "remaining_usdt": round(remaining_usdt, 4),
             "safe_address": safe_address,
             "trading_balance_usdc": trading_balance_usdc,
+        },
+    )
+
+
+@router.get("/wallet-balance")
+async def get_wallet_balance(
+    wallet_address: str = Depends(verify_auth_only),
+):
+    """Check BSC wallet balance (USDT + BNB).
+
+    Free endpoint. Helps agents know if the user has enough
+    BNB for gas and USDT for deposits before attempting transactions.
+    """
+    import asyncio
+
+    def _check_bsc_balances():
+        w3 = payment_svc.get_w3()
+        wallet = w3.to_checksum_address(wallet_address)
+        bnb_wei = w3.eth.get_balance(wallet)
+        usdt_contract = payment_svc.get_usdt_contract()
+        usdt_wei = usdt_contract.functions.balanceOf(wallet).call()
+        return bnb_wei, usdt_wei
+
+    try:
+        bnb_wei, usdt_wei = await asyncio.to_thread(payment_svc._locked, _check_bsc_balances)
+    except Exception as e:
+        logger.warning("Failed to fetch BSC balances for %s: %s", wallet_address[:10], e)
+        raise HTTPException(
+            status_code=502,
+            detail=ErrorResponse(
+                error_code="RPC_ERROR",
+                message="Failed to fetch BSC wallet balance. Please retry.",
+            ).model_dump(),
+        )
+
+    from decimal import Decimal
+    bnb = float(Decimal(bnb_wei) / 10**18)
+    usdt = float(Decimal(usdt_wei) / 10**18)
+
+    # Estimate how many API calls / deposits possible
+    calls_possible = int(Decimal(usdt_wei) / Decimal(settings.payment_amount_wei))
+
+    summary = f"BSC wallet {wallet_address[:10]}...: {usdt:.4f} USDT, {bnb:.4f} BNB"
+
+    return SuccessResponse(
+        summary=summary,
+        data={
+            "bnb_balance": round(bnb, 6),
+            "usdt_balance": round(usdt, 4),
+            "usdt_wei": str(usdt_wei),
+            "bnb_sufficient_for_gas": bnb > 0.001,
+            "calls_possible": calls_possible,
         },
     )
 

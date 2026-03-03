@@ -69,7 +69,7 @@ Minimal signing code:
 signed_txs = []
 for t in tx_data["transactions"]:
     signed = account.sign_transaction(t["transaction"])
-    signed_txs.append(signed.raw_transaction.hex())
+    signed_txs.append("0x" + signed.raw_transaction.hex())
 
 # Then make HTTP call:
 # POST /payment/submit-tx

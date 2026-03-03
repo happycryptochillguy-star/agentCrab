@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     # Encryption key for L2 credentials at rest (Fernet, base64-encoded 32 bytes)
     # Generate with: python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
     l2_encryption_key: str = ""
+    l2_encryption_key_old: str = ""  # Previous key for rotation (decrypt only)
 
     # Admin
     admin_key: str = ""

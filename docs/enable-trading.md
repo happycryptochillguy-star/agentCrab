@@ -79,6 +79,8 @@ Response includes L2 credentials:
 {"api_key": "...", "secret": "...", "passphrase": "..."}
 ```
 
+**Important:** After depositing USDC.e to your Polymarket trading balance (via `deposit_to_polymarket()` or `POST /deposit/prepare-transfer`), wait 1-2 minutes for the relay to complete, then call `refresh_balance()` (SDK) or `POST /trading/refresh-balance` (API) to update the CLOB's cached view of your on-chain balance. Without this step, the CLOB may not see your deposited funds and orders will fail with insufficient balance.
+
 **These are cached server-side.** On future sessions, retrieve them for free instead of re-deriving:
 
 ```

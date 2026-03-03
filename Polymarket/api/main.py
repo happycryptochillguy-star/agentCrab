@@ -5,10 +5,12 @@ from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from api.config import settings
+from api.services import balance as balance_svc
 from api.services.balance import init_db
 from api.services import history as history_svc
 from api.services import http_pool
@@ -67,9 +69,11 @@ _TIER_RULES: list[tuple[str, str]] = [
     ("/polymarket/deposit/supported-assets", "open"),
     ("/health", "open"),
     # prepare-*, credentials, and trigger query endpoints are free (auth only)
+    ("/polymarket/payment/wallet-balance", "auth"),
     ("/polymarket/payment/", "auth"),
     ("/polymarket/trading/prepare-", "auth"),
     ("/polymarket/trading/credentials", "auth"),
+    ("/polymarket/trading/status", "auth"),
     ("/polymarket/trading/triggers/prepare", "auth"),
     # everything else is paid
 ]
@@ -181,17 +185,27 @@ async def lifespan(app: FastAPI):
 async def _history_sync_loop():
     """Periodic background loop: full sync on first run if empty, then incremental every 6h."""
     try:
-        # First run: full sync if empty, otherwise incremental
-        is_empty = await history_svc.is_empty()
-        if is_empty:
-            logger.info("Historical events table empty — running full sync...")
-            count = await history_svc.sync_historical_events(max_pages=0)
-        else:
-            logger.info("Historical events table has data — running incremental sync...")
-            count = await history_svc.sync_historical_events(
-                max_pages=history_svc.INCREMENTAL_MAX_PAGES
-            )
-        logger.info(f"Initial history sync done: {count} events.")
+        # First run: retry with backoff until initial sync succeeds
+        backoff = 30
+        while True:
+            try:
+                is_empty = await history_svc.is_empty()
+                if is_empty:
+                    logger.info("Historical events table empty — running full sync...")
+                    count = await history_svc.sync_historical_events(max_pages=0)
+                else:
+                    logger.info("Historical events table has data — running incremental sync...")
+                    count = await history_svc.sync_historical_events(
+                        max_pages=history_svc.INCREMENTAL_MAX_PAGES
+                    )
+                logger.info(f"Initial history sync done: {count} events.")
+                break
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"Initial history sync failed (retry in {backoff}s): {e}")
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 600)
 
         # Then loop forever: sleep → incremental sync
         while True:
@@ -208,8 +222,6 @@ async def _history_sync_loop():
     except asyncio.CancelledError:
         logger.info("History sync loop cancelled (shutdown)")
         raise
-    except Exception as e:
-        logger.error(f"History sync loop crashed: {e}")
 
 
 async def _category_leaderboard_sync_loop():
@@ -218,12 +230,20 @@ async def _category_leaderboard_sync_loop():
         # Wait 2 min for history sync to populate some market tags first
         await asyncio.sleep(120)
 
-        logger.info("Starting initial category leaderboard sync...")
-        try:
-            result = await cat_lb_svc.sync_category_leaderboard()
-            logger.info(f"Initial category leaderboard sync done: {result}")
-        except Exception as e:
-            logger.error(f"Initial category leaderboard sync failed: {e}")
+        # Initial sync with retry
+        backoff = 60
+        while True:
+            try:
+                logger.info("Starting initial category leaderboard sync...")
+                result = await cat_lb_svc.sync_category_leaderboard()
+                logger.info(f"Initial category leaderboard sync done: {result}")
+                break
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"Initial category leaderboard sync failed (retry in {backoff}s): {e}")
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 600)
 
         # Then loop: sleep → sync
         while True:
@@ -238,8 +258,6 @@ async def _category_leaderboard_sync_loop():
     except asyncio.CancelledError:
         logger.info("Category leaderboard sync loop cancelled (shutdown)")
         raise
-    except Exception as e:
-        logger.error(f"Category leaderboard sync loop crashed: {e}")
 
 
 app = FastAPI(
@@ -258,6 +276,58 @@ app.add_middleware(
     allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Wrap FastAPI's default 422 validation errors in our standard ErrorResponse format.
+
+    Without this, missing auth headers produce raw Pydantic errors that agents
+    cannot parse (they expect {"status": "error", "error_code": ..., "message": ...}).
+    """
+    # Build a human-readable message from the validation errors
+    errors = exc.errors()
+    missing = [e["loc"][-1] for e in errors if e.get("type") == "missing"]
+    if missing:
+        msg = f"Missing required header(s): {', '.join(missing)}. Check the API docs for required authentication headers."
+    else:
+        details = "; ".join(f"{e['loc'][-1]}: {e['msg']}" for e in errors[:3])
+        msg = f"Request validation failed: {details}"
+    return JSONResponse(
+        status_code=422,
+        content={
+            "status": "error",
+            "error_code": "VALIDATION_ERROR",
+            "message": msg,
+        },
+    )
+
+
+@app.middleware("http")
+async def upstream_failure_refund_middleware(request: Request, call_next):
+    """Refund prepaid balance when upstream services fail (502/503/504).
+
+    Paid endpoints deduct balance BEFORE the handler runs. If the handler
+    raises a 502 (e.g. Polymarket is down), the user shouldn't lose money.
+    Trading routes handle their own refunds, so we skip those.
+    """
+    response = await call_next(request)
+    # Only refund on upstream failures (not client errors or auth errors)
+    if response.status_code in (502, 503, 504):
+        wallet = getattr(request.state, "paid_wallet", None)
+        amount = getattr(request.state, "paid_amount", 0)
+        # Skip routes that already handle their own refunds
+        path = request.url.path
+        self_refund_paths = ("/trading/submit-order", "/trading/submit-batch-order")
+        if wallet and amount > 0 and not any(path.endswith(p) for p in self_refund_paths):
+            try:
+                await balance_svc.refund(wallet, amount, f"auto-refund:{path}")
+                from api.services import payment as payment_svc
+                payment_svc.invalidate_balance_cache(wallet)
+                logger.info("Auto-refunded %s for upstream failure on %s", wallet[:10], path)
+            except Exception:
+                logger.warning("Auto-refund failed for %s on %s", wallet[:10], path)
+    return response
 
 
 @app.middleware("http")
@@ -279,6 +349,7 @@ async def rate_limit_middleware(request: Request, call_next):
                 "error_code": "RATE_LIMITED",
                 "message": f"Too many requests ({tier} tier). Maximum {limit} requests per {RATE_WINDOW}s. Please slow down.",
             },
+            headers={"Retry-After": str(RATE_WINDOW)},
         )
     response = await call_next(request)
     # SDK version header: tells agents the minimum required SDK version

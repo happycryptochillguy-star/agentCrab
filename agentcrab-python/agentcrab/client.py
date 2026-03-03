@@ -102,6 +102,19 @@ class AgentCrab:
             raw=d,
         )
 
+    def get_wallet_balance(self) -> dict:
+        """Get BSC wallet balance (USDT + BNB). Free, auth only."""
+        resp = self._http.get("/payment/wallet-balance")
+        return _extract_data(resp)
+
+    def get_trading_status(self) -> dict:
+        """Check trading setup status: Safe deployed, approvals, credentials, balances.
+
+        Free, auth only. Returns next_step recommendation.
+        """
+        resp = self._http.get("/trading/status")
+        return _extract_data(resp)
+
     def deposit(self, amount_usdt: float) -> DepositResult:
         """Deposit USDT to agentCrab prepaid balance on BSC.
 
@@ -135,7 +148,7 @@ class AgentCrab:
         Full flow: prepare-transfer -> sign txs -> submit-tx.
         """
         # 1. Prepare
-        prep = self._http.post("/deposit/prepare-transfer", json={"amount_usdt": amount_usdt}, paid=True)
+        prep = self._http.post("/deposit/prepare-transfer", json={"amount_usdt": amount_usdt})
         data = _extract_data(prep)
 
         # 2. Sign all transactions
@@ -190,6 +203,8 @@ class AgentCrab:
         closed: bool = False,
     ) -> list[Market]:
         """Browse Polymarket events by category or mood."""
+        if not category and not mood:
+            raise ValueError("browse() requires at least one of 'category' or 'mood'")
         params: dict = {"limit": limit, "offset": offset, "closed": closed}
         if category:
             params["category"] = category
@@ -201,9 +216,24 @@ class AgentCrab:
         events = data if isinstance(data, list) else data.get("events", [])
         return [_parse_market(e) for e in events]
 
+    def get_categories(self) -> list[dict]:
+        """Get available market categories (free, no auth needed).
+
+        Returns a list of category dicts from the server.
+        """
+        resp = self._http.get("/markets/categories", auth=False)
+        data = _extract_data(resp)
+        return data if isinstance(data, list) else data.get("categories", [])
+
     def get_event(self, event_id: str) -> Market:
         """Get a single event by ID."""
         resp = self._http.get(f"/markets/events/{event_id}", paid=True)
+        d = _extract_data(resp)
+        return _parse_market(d)
+
+    def get_event_by_slug(self, slug: str) -> Market:
+        """Get a single event by slug (human-readable URL identifier)."""
+        resp = self._http.get(f"/markets/events/slug/{slug}", paid=True)
         d = _extract_data(resp)
         return _parse_market(d)
 
@@ -261,6 +291,25 @@ class AgentCrab:
             raw=d,
         )
 
+    def get_orderbooks_batch(self, token_ids: list[str]) -> list[Orderbook]:
+        """Batch fetch orderbooks for up to 20 tokens. Counts as 1 API call."""
+        resp = self._http.post("/orderbook/batch", json=token_ids, paid=True)
+        data = _extract_data(resp)
+        items = data if isinstance(data, list) else []
+        return [
+            Orderbook(
+                token_id=d.get("token_id", ""),
+                bids=d.get("bids", []),
+                asks=d.get("asks", []),
+                best_bid=d.get("best_bid"),
+                best_ask=d.get("best_ask"),
+                spread=d.get("spread"),
+                midpoint=d.get("midpoint"),
+                raw=d,
+            )
+            for d in items
+        ]
+
     def get_price(self, token_id: str) -> Price:
         """Get price summary for a token."""
         resp = self._http.get(f"/prices/{token_id}", paid=True)
@@ -274,6 +323,24 @@ class AgentCrab:
             last_trade_price=d.get("last_trade_price"),
             raw=d,
         )
+
+    def get_prices_batch(self, token_ids: list[str]) -> list[Price]:
+        """Batch fetch prices for up to 20 tokens. Counts as 1 API call."""
+        resp = self._http.post("/prices/batch", json=token_ids, paid=True)
+        data = _extract_data(resp)
+        items = data if isinstance(data, list) else []
+        return [
+            Price(
+                token_id=d.get("token_id", ""),
+                best_bid=d.get("best_bid"),
+                best_ask=d.get("best_ask"),
+                midpoint=d.get("midpoint"),
+                spread=d.get("spread"),
+                last_trade_price=d.get("last_trade_price"),
+                raw=d,
+            )
+            for d in items
+        ]
 
     def find_tradeable(
         self,
@@ -579,13 +646,20 @@ class AgentCrab:
     # ------------------------------------------------------------------
 
     def _fetch_cached_credentials(self) -> dict | None:
-        """Try to fetch cached L2 credentials from the server (free)."""
+        """Try to fetch cached L2 credentials from the server (free).
+
+        Lets ``NetworkError`` propagate (connectivity issue the caller should
+        know about).  Other API errors (404 not cached, 401 auth, etc.) are
+        silently ignored — the caller will fall through to the full setup flow.
+        """
+        from ._exceptions import APIError, AuthError, PaymentError
+
         try:
             resp = self._http.get("/trading/credentials")
             data = _extract_data(resp)
             if data and data.get("api_key"):
                 return data
-        except Exception:
+        except (APIError, AuthError, PaymentError, KeyError, ValueError):
             pass
         return None
 
@@ -903,7 +977,7 @@ class AgentCrab:
         items = data if isinstance(data, list) else data.get("triggers", [])
         return [
             Trigger(
-                trigger_id=t.get("id", ""),
+                trigger_id=t.get("trigger_id", t.get("id", "")),
                 token_id=t.get("token_id", ""),
                 trigger_type=t.get("trigger_type", ""),
                 trigger_price=t.get("trigger_price", ""),

@@ -68,6 +68,94 @@ async def get_contracts():
     )
 
 
+@router.get("/status")
+async def get_trading_status(
+    wallet_address: str = Depends(verify_auth_only),
+):
+    """Check onboarding status — what has been completed and what's next.
+
+    Free endpoint. Returns a unified view of:
+    - Safe deployed?
+    - Approvals done?
+    - L2 credentials cached?
+    - Trading balance (USDC.e)
+    - agentCrab prepaid balance
+
+    This is the single endpoint an agent should call to understand
+    the current state and determine the next step.
+    """
+    safe_address = payment_svc.derive_safe_address(wallet_address)
+
+    # Check Safe deployment
+    safe_deployed = False
+    try:
+        safe_deployed = await relayer_svc.is_safe_deployed(wallet_address)
+    except Exception:
+        pass
+
+    # Check approvals
+    approvals_done = False
+    if safe_deployed:
+        try:
+            status = await relayer_svc.check_approval_status(safe_address)
+            approvals_done = status.get("all_approved", False)
+        except Exception:
+            pass
+
+    # Check L2 credentials
+    has_credentials = False
+    creds = await balance_svc.get_l2_credentials(wallet_address)
+    if creds and creds.get("api_key"):
+        has_credentials = True
+
+    # Get agentCrab prepaid balance
+    _, _, remaining = await balance_svc.get_remaining(wallet_address)
+    calls_remaining = balance_svc.calls_remaining(remaining)
+
+    # Get Polymarket trading balance
+    trading_balance = None
+    if has_credentials:
+        try:
+            result = await clob_svc.update_balance_allowance(
+                api_key=creds["api_key"],
+                secret=creds["secret"],
+                passphrase=creds["passphrase"],
+                eoa_address=wallet_address,
+            )
+            trading_balance = result
+        except Exception:
+            pass
+
+    # Determine next step
+    if not safe_deployed:
+        next_step = "POST /trading/prepare-deploy-safe → sign → POST /trading/submit-deploy-safe"
+        status_summary = "Safe not deployed. Deploy it first to enable trading."
+    elif not approvals_done:
+        next_step = "POST /trading/prepare-enable → sign → POST /trading/submit-approvals"
+        status_summary = "Safe deployed but approvals missing. Enable trading next."
+    elif not has_credentials:
+        next_step = "POST /trading/prepare-enable → sign clob_typed_data → POST /trading/submit-credentials"
+        status_summary = "Approvals done but no L2 credentials. Derive credentials next."
+    else:
+        next_step = "Ready to trade! Use POST /trading/prepare-order → sign → POST /trading/submit-order"
+        status_summary = "Fully set up and ready to trade."
+
+    return SuccessResponse(
+        summary=status_summary,
+        data={
+            "wallet_address": wallet_address,
+            "safe_address": safe_address,
+            "safe_deployed": safe_deployed,
+            "approvals_done": approvals_done,
+            "has_credentials": has_credentials,
+            "calls_remaining": calls_remaining,
+            "remaining_usdt": round(remaining / 10**18, 4) if remaining else 0,
+            "trading_balance": trading_balance,
+            "next_step": next_step,
+        },
+    )
+
+
 # === Safe Deployment ===
 
 
@@ -592,7 +680,7 @@ async def submit_order(
         )
     except httpx.HTTPStatusError as e:
         # Refund the deducted balance on CLOB rejection
-        await balance_svc.credit_deposit(wallet_address, settings.payment_amount_wei)
+        await balance_svc.refund(wallet_address, settings.payment_amount_wei, "/trading/submit-order")
         payment_svc.invalidate_balance_cache(wallet_address)
         logger.warning("Polymarket rejected order for %s (refunded): %s", wallet_address[:10], e.response.text if hasattr(e, "response") else e)
         raise HTTPException(
@@ -604,7 +692,7 @@ async def submit_order(
         )
     except Exception as e:
         # Refund the deducted balance on internal error
-        await balance_svc.credit_deposit(wallet_address, settings.payment_amount_wei)
+        await balance_svc.refund(wallet_address, settings.payment_amount_wei, "/trading/submit-order")
         payment_svc.invalidate_balance_cache(wallet_address)
         logger.exception("Failed to submit order for %s (refunded)", wallet_address[:10])
         raise HTTPException(
@@ -624,7 +712,7 @@ async def submit_order(
     if status == "matched" and success:
         taking = result.get("takingAmount", "?")
         making = result.get("makingAmount", "?")
-        side = req.clob_order.get("side", "?")
+        side = req.clob_order.side
         if side == "BUY":
             summary = f"Order filled: bought {taking} shares for ${making} USDC."
         else:
@@ -774,6 +862,15 @@ async def submit_batch_order(
         wallet_address, total_cost_wei, request.url.path,
     )
     if not consumed:
+        # First-time user: sync on-chain balance and retry
+        try:
+            await payment_svc.sync_balance(wallet_address)
+        except Exception:
+            pass
+        consumed = await balance_svc.consume(
+            wallet_address, total_cost_wei, request.url.path,
+        )
+    if not consumed:
         raise HTTPException(
             status_code=402,
             detail=ErrorResponse(
@@ -807,7 +904,7 @@ async def submit_batch_order(
         )
     except Exception as e:
         # Refund the full batch cost on total failure
-        await balance_svc.credit_deposit(wallet_address, total_cost_wei)
+        await balance_svc.refund(wallet_address, total_cost_wei, "/trading/submit-batch-order")
         payment_svc.invalidate_balance_cache(wallet_address)
         logger.exception("Failed to submit batch order for %s (refunded %d orders)", wallet_address[:10], n)
         raise HTTPException(
@@ -844,7 +941,7 @@ async def submit_batch_order(
     # Refund only failed orders (proportional, not full refund)
     if fail_count > 0:
         refund_wei = fail_count * settings.payment_amount_wei
-        await balance_svc.credit_deposit(wallet_address, refund_wei)
+        await balance_svc.refund(wallet_address, refund_wei, "/trading/submit-batch-order")
         payment_svc.invalidate_balance_cache(wallet_address)
 
     actual_charged = success_count * 0.01

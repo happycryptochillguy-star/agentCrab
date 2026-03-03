@@ -2,8 +2,11 @@
 
 ## Install & Init
 
-```python
+```bash
 pip install -U agentcrab  # always use latest version
+```
+
+```python
 from agentcrab import AgentCrab
 
 # With existing key (use as context manager to auto-close connections):
@@ -86,6 +89,7 @@ result = client.buy(yes_token, size=5.0, price=0.65)
 
 ```python
 client.get_balance() → Balance
+#   .wallet_address (str)           ← your BSC wallet address (EOA)
 #   .calls_remaining (int)          ← API calls left
 #   .remaining_usdt (float)         ← prepaid USDT balance
 #   .trading_balance_usdc (float)   ← USDC available for trading on Polymarket
@@ -112,6 +116,7 @@ client.search("bitcoin") → list[Market]
 client.search("Trump", category="crypto") → list[Market]
 client.browse(category="sports.nba") → list[Market]
 client.browse(mood="trending") → list[Market]
+client.get_categories() → list[dict]   # free, no auth — list available categories
 client.get_event("event_id") → Market
 client.get_market("market_id") → dict
 

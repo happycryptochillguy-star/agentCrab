@@ -50,6 +50,20 @@ async def create_trigger(
 
     db = await get_db()
     async with _write_lock:
+        # Duplicate check INSIDE the lock to prevent TOCTOU race
+        cursor = await db.execute(
+            """SELECT id FROM triggers
+               WHERE wallet_address = ? AND token_id = ? AND trigger_type = ?
+                 AND exit_side = ? AND trigger_price = ? AND status = 'active'""",
+            (wallet_address.lower(), token_id, trigger_type,
+             exit_side.upper(), str(trigger_price)),
+        )
+        existing = await cursor.fetchone()
+        if existing:
+            raise ValueError(
+                f"Duplicate trigger: an active {trigger_type} trigger already exists "
+                f"for this token at price {trigger_price}. Cancel it first or use a different price."
+            )
         await db.execute(
             """INSERT INTO triggers
                (id, wallet_address, token_id, trigger_type, trigger_price,
@@ -100,21 +114,22 @@ async def create_trigger(
 async def get_trigger(trigger_id: str, wallet_address: str | None = None) -> dict | None:
     """Get a single trigger by ID. Optionally filter by wallet."""
     db = await get_db()
-    db.row_factory = _row_factory
     if wallet_address:
-        row = await db.execute_fetchall(
+        cursor = await db.execute(
             "SELECT * FROM triggers WHERE id = ? AND wallet_address = ?",
             (trigger_id, wallet_address.lower()),
         )
     else:
-        row = await db.execute_fetchall(
+        cursor = await db.execute(
             "SELECT * FROM triggers WHERE id = ?",
             (trigger_id,),
         )
-    db.row_factory = None
+    row = await cursor.fetchone()
     if not row:
         return None
-    return _row_to_dict(row[0])
+    # Convert tuple to dict using column descriptions
+    cols = [col[0] for col in cursor.description]
+    return _row_to_dict(dict(zip(cols, row)))
 
 
 async def list_triggers(
@@ -136,10 +151,10 @@ async def list_triggers(
     query += " ORDER BY created_at DESC"
 
     db = await get_db()
-    db.row_factory = _row_factory
-    rows = await db.execute_fetchall(query, params)
-    db.row_factory = None
-    return [_row_to_dict(r) for r in rows]
+    cursor = await db.execute(query, params)
+    rows = await cursor.fetchall()
+    cols = [col[0] for col in cursor.description]
+    return [_row_to_dict(dict(zip(cols, row))) for row in rows]
 
 
 async def cancel_trigger(trigger_id: str, wallet_address: str) -> bool:
@@ -205,17 +220,60 @@ def should_trigger(trigger: dict, current_price: float) -> bool:
 
 
 async def _execute_trigger(trigger: dict) -> dict:
-    """Submit the pre-signed order for a triggered trigger."""
-    clob_order = json.loads(trigger["clob_order"])
-    return await clob_svc.post_signed_order(
-        clob_order=clob_order,
-        signature=trigger["signature"],
+    """Execute a trigger by placing a fresh order via L2 HMAC auth.
+
+    Pre-signed EIP-712 orders expire if hours/days pass between signing
+    and execution. Instead, we use the stored L2 credentials to place the
+    order directly via the CLOB's L2 authenticated endpoint (HMAC auth).
+    This bypasses the need for EIP-712 signatures entirely.
+    """
+    from api.models import OrderRequest
+
+    api_key = _decrypt(trigger["l2_api_key"])
+    secret = _decrypt(trigger["l2_secret"])
+    passphrase = _decrypt(trigger["l2_passphrase"])
+    eoa = trigger["wallet_address"]
+    token_id = trigger["token_id"]
+    side = trigger["exit_side"].upper()
+
+    # Get size and price from stored trigger metadata
+    size = float(trigger["size"]) if trigger.get("size") else None
+    price = float(trigger["price"]) if trigger.get("price") else None
+
+    # Fall back to parsing the original clob_order if metadata missing
+    if not size or not price:
+        old_order = json.loads(trigger["clob_order"])
+        if not size:
+            maker_amt = int(old_order.get("makerAmount", "0"))
+            taker_amt = int(old_order.get("takerAmount", "0"))
+            # For BUY: takerAmount = size in token decimals
+            # For SELL: makerAmount = size in token decimals
+            raw = taker_amt if side == "BUY" else maker_amt
+            size = raw / 10**6 if raw else 1.0
+        if not price:
+            price = float(trigger["trigger_price"])
+
+    order = OrderRequest(
+        token_id=token_id,
+        side=side,
+        size=size,
+        price=price,
         order_type=trigger["order_type"],
-        api_key=_decrypt(trigger["l2_api_key"]),
-        secret=_decrypt(trigger["l2_secret"]),
-        passphrase=_decrypt(trigger["l2_passphrase"]),
-        eoa_address=trigger["wallet_address"],
     )
+
+    resp = await clob_svc.place_order(
+        order=order,
+        api_key=api_key,
+        secret=secret,
+        passphrase=passphrase,
+        poly_address=eoa,
+    )
+    # Convert OrderResponse to dict for the monitor loop
+    return {
+        "orderID": resp.order_id,
+        "status": resp.status,
+        "success": True,
+    }
 
 
 async def _update_trigger_status(
@@ -241,12 +299,12 @@ async def _update_trigger_status(
 async def _get_active_triggers() -> list[dict]:
     """Fetch all active triggers from SQLite."""
     db = await get_db()
-    db.row_factory = _row_factory
-    rows = await db.execute_fetchall(
+    cursor = await db.execute(
         "SELECT * FROM triggers WHERE status = 'active'"
     )
-    db.row_factory = None
-    return [dict(r) for r in rows]
+    rows = await cursor.fetchall()
+    cols = [col[0] for col in cursor.description]
+    return [dict(zip(cols, row)) for row in rows]
 
 
 async def _expire_old_triggers():
@@ -396,15 +454,12 @@ async def trigger_monitor_loop():
 # ---------------------------------------------------------------------------
 
 
-def _row_factory(cursor, row):
-    """SQLite row factory that returns Row-like objects."""
-    cols = [col[0] for col in cursor.description]
-    return dict(zip(cols, row))
-
-
 def _row_to_dict(row) -> dict:
     """Convert a Row to a sanitized dict (strip L2 creds and signature)."""
     d = dict(row) if not isinstance(row, dict) else row
+    # Normalize ID field: SQLite column is 'id', API returns 'trigger_id'
+    if "id" in d and "trigger_id" not in d:
+        d["trigger_id"] = d.pop("id")
     # Never expose sensitive fields
     for key in ("l2_api_key", "l2_secret", "l2_passphrase", "signature", "clob_order"):
         d.pop(key, None)

@@ -21,6 +21,10 @@ async def verify_auth_and_payment(
     Returns the wallet address on success.
     Raises HTTPException on failure.
     """
+    # Store payment context on request for upstream-failure refund middleware
+    request.state.paid_wallet = None
+    request.state.paid_amount = 0
+
     # 1. Verify signature
     if not payment_svc.verify_signature(x_wallet_address, x_message, x_signature):
         raise HTTPException(
@@ -59,6 +63,16 @@ async def verify_auth_and_payment(
         consumed = await balance_svc.consume(
             x_wallet_address, settings.payment_amount_wei, endpoint
         )
+        if not consumed:
+            # First-time user may have deposited on-chain but local DB not yet synced.
+            # Sync once and retry before rejecting.
+            try:
+                await payment_svc.sync_balance(x_wallet_address)
+            except Exception:
+                pass  # sync failure is non-fatal; we'll check consume again
+            consumed = await balance_svc.consume(
+                x_wallet_address, settings.payment_amount_wei, endpoint
+            )
         payment_svc.invalidate_balance_cache(x_wallet_address)
         if not consumed:
             raise HTTPException(
@@ -68,6 +82,9 @@ async def verify_auth_and_payment(
                     message=f"Insufficient prepaid balance. Deposit USDT to contract {settings.contract_address} on BSC (chain ID 56). Each API call costs 0.01 USDT.",
                 ).model_dump(),
             )
+        # Mark for refund-on-upstream-failure middleware
+        request.state.paid_wallet = x_wallet_address
+        request.state.paid_amount = settings.payment_amount_wei
 
     else:
         raise HTTPException(

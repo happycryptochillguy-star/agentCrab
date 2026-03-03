@@ -138,8 +138,8 @@ async def get_capabilities():
                     {
                         "path": "/payment/submit-tx",
                         "method": "POST",
-                        "description": "Broadcast a signed BSC transaction. Auth required, no payment.",
-                        "body": {"signed_tx": "str (hex-encoded signed raw transaction)"},
+                        "description": "Broadcast signed transaction(s) to BSC or Polygon. Auth required, no payment.",
+                        "body": {"signed_tx": "str (single tx, hex-encoded)", "signed_txs": "list[str] (batch mode, broadcasted sequentially)", "chain": "\"bsc\"|\"polygon\" (default: bsc)"},
                     },
                     {
                         "path": "/deposit/supported-assets",
@@ -150,6 +150,28 @@ async def get_capabilities():
                         "path": "/trading/credentials",
                         "method": "GET",
                         "description": "Retrieve cached L2 trading credentials (from a previous submit-credentials call). Free, saves re-deriving each session.",
+                    },
+                    {
+                        "path": "/trading/refresh-balance",
+                        "method": "POST",
+                        "description": "Tell Polymarket CLOB to refresh its cached balance/allowances. Call after depositing USDC.e or enabling trading. Requires L2 headers. Auth required, no payment.",
+                        "extra_headers": ["X-Poly-Api-Key", "X-Poly-Secret", "X-Poly-Passphrase"],
+                    },
+                    {
+                        "path": "/trading/status",
+                        "method": "GET",
+                        "description": "Check trading setup status: Safe deployed, approvals done, L2 credentials cached. Auth required, no payment.",
+                    },
+                    {
+                        "path": "/payment/wallet-balance",
+                        "method": "GET",
+                        "description": "Check BSC wallet balance (USDT + BNB). Helps verify user has enough for gas and deposits. Auth required, no payment.",
+                    },
+                    {
+                        "path": "/deposit/prepare-transfer",
+                        "method": "POST",
+                        "description": "One-step Polymarket deposit: gets quote from relay and builds unsigned BSC transactions. Agent signs and submits via /payment/submit-tx. Auth required, no payment.",
+                        "body": {"amount_usdt": "float (amount to deposit, min 0.01)"},
                     },
                     {
                         "path": "/trading/prepare-order",
@@ -212,12 +234,6 @@ async def get_capabilities():
                 ],
                 "paid_deposit": [
                     {
-                        "path": "/deposit/prepare-transfer",
-                        "method": "POST",
-                        "description": "One-step Polymarket deposit: gets deposit address from Polymarket bridge and builds unsigned BSC USDT transfer. Agent signs and submits via /payment/submit-tx.",
-                        "body": {"amount_usdt": "float (amount to deposit)"},
-                    },
-                    {
                         "path": "/deposit/create",
                         "method": "POST",
                         "description": "Get deposit addresses for funding Polymarket. Returns EVM/Solana/BTC addresses.",
@@ -235,7 +251,7 @@ async def get_capabilities():
                         "path": "/markets/browse",
                         "method": "GET",
                         "description": "Browse markets by category (e.g. sports.nba, crypto.bitcoin, politics.trump). Use /markets/categories to discover paths.",
-                        "params": {"category": "str (required, dot path)", "limit": "int (1-100)", "offset": "int", "closed": "bool"},
+                        "params": {"category": "str? (dot path, e.g. sports.nba)", "mood": "str? (trending, interesting, controversial, new, closing_soon)", "limit": "int (1-100)", "offset": "int", "closed": "bool", "note": "At least one of category or mood required."},
                     },
                     {
                         "path": "/markets/search",

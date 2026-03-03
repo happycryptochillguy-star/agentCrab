@@ -51,8 +51,10 @@ for pos in client.get_positions():
 | Method | Description | Cost |
 |--------|-------------|------|
 | `get_balance()` | Prepaid balance | Free |
+| `get_wallet_balance()` | BSC wallet USDT + BNB | Free |
+| `get_trading_status()` | Trading setup status | Free |
 | `deposit(amount_usdt)` | Deposit to agentCrab | Free |
-| `deposit_to_polymarket(amount_usdt)` | Deposit to Polymarket | 0.01 USDT |
+| `deposit_to_polymarket(amount_usdt)` | Deposit to Polymarket | Free |
 
 ### Market Data
 
@@ -60,10 +62,14 @@ for pos in client.get_positions():
 |--------|-------------|------|
 | `search(query, tag, category)` | Search events | 0.01 USDT |
 | `browse(category, mood)` | Browse events | 0.01 USDT |
+| `get_categories()` | List market categories | Free |
 | `get_event(event_id)` | Get single event | 0.01 USDT |
+| `get_event_by_slug(slug)` | Get event by slug | 0.01 USDT |
 | `get_market(market_id)` | Get single market | 0.01 USDT |
 | `get_orderbook(token_id)` | Get orderbook | 0.01 USDT |
+| `get_orderbooks_batch(token_ids)` | Batch orderbooks (up to 20) | 0.01 USDT |
 | `get_price(token_id)` | Get price | 0.01 USDT |
+| `get_prices_batch(token_ids)` | Batch prices (up to 20) | 0.01 USDT |
 | `find_tradeable(query, category, mood)` | Find liquid market + orderbook | varies |
 | `search_history(query, category)` | Search closed events | 0.01 USDT |
 | `sync_history()` | Trigger closed-event sync | Free |

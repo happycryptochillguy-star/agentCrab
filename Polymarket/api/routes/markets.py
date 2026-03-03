@@ -492,11 +492,13 @@ async def sync_history(
         except Exception as e:
             logger.exception("Background history sync failed")
         finally:
-            _bg_sync_running = False
+            async with _bg_sync_lock:
+                _bg_sync_running = False
 
-    if not _bg_sync_running:
-        _bg_sync_running = True
-        asyncio.create_task(_bg_sync())
+    async with _bg_sync_lock:
+        if not _bg_sync_running:
+            _bg_sync_running = True
+            asyncio.create_task(_bg_sync())
 
     stats = await history_svc.get_history_stats()
     return SuccessResponse(

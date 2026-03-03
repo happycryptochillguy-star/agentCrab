@@ -4,16 +4,14 @@ import json
 import logging
 import time
 
-import aiosqlite
 import httpx
 
 from api.config import settings
 from api.services.http_pool import get_proxy_client
 from api.services.categories import CATEGORIES
+from api.services.balance import get_db, _write_lock
 
 logger = logging.getLogger("agentcrab.history")
-
-DB_PATH = settings.db_path
 
 # Track last sync time for throttling
 _last_sync_time: float = 0.0
@@ -176,7 +174,8 @@ async def sync_historical_events(max_pages: int = 0) -> int:
                 now,
             ))
 
-        async with aiosqlite.connect(DB_PATH) as db:
+        db = await get_db()
+        async with _write_lock:
             await db.executemany(
                 """INSERT OR REPLACE INTO historical_events
                    (event_id, title, category, start_date, end_date, closed_time,
@@ -235,13 +234,14 @@ async def search_history(
     """
     params.extend([limit, offset])
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        rows = await db.execute_fetchall(sql, params)
+    db = await get_db()
+    cursor = await db.execute(sql, params)
+    rows = await cursor.fetchall()
+    cols = [col[0] for col in cursor.description]
 
     results: list[dict] = []
     for row in rows:
-        r = dict(row)
+        r = dict(zip(cols, row))
         # Parse tags JSON back to list
         if r.get("tags"):
             try:
@@ -255,32 +255,33 @@ async def search_history(
 
 async def get_history_stats() -> dict:
     """Return stats about the historical events database."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        # Total count
-        row = await db.execute_fetchall("SELECT COUNT(*) FROM historical_events")
-        total = row[0][0] if row else 0
+    db = await get_db()
 
-        if total == 0:
-            return {"total_events": 0, "categories": {}, "last_sync": None}
+    # Total count
+    row = await db.execute_fetchall("SELECT COUNT(*) FROM historical_events")
+    total = row[0][0] if row else 0
 
-        # Date range
-        row = await db.execute_fetchall(
-            "SELECT MIN(start_date), MAX(end_date) FROM historical_events"
-        )
-        earliest = row[0][0] if row else None
-        latest = row[0][1] if row else None
+    if total == 0:
+        return {"total_events": 0, "categories": {}, "last_sync": None}
 
-        # Category breakdown
-        rows = await db.execute_fetchall(
-            "SELECT category, COUNT(*) FROM historical_events GROUP BY category ORDER BY COUNT(*) DESC"
-        )
-        categories = {r[0] or "uncategorized": r[1] for r in rows}
+    # Date range
+    row = await db.execute_fetchall(
+        "SELECT MIN(start_date), MAX(end_date) FROM historical_events"
+    )
+    earliest = row[0][0] if row else None
+    latest = row[0][1] if row else None
 
-        # Last sync
-        row = await db.execute_fetchall(
-            "SELECT MAX(synced_at) FROM historical_events"
-        )
-        last_sync = row[0][0] if row else None
+    # Category breakdown
+    rows = await db.execute_fetchall(
+        "SELECT category, COUNT(*) FROM historical_events GROUP BY category ORDER BY COUNT(*) DESC"
+    )
+    categories = {r[0] or "uncategorized": r[1] for r in rows}
+
+    # Last sync
+    row = await db.execute_fetchall(
+        "SELECT MAX(synced_at) FROM historical_events"
+    )
+    last_sync = row[0][0] if row else None
 
     return {
         "total_events": total,
@@ -297,8 +298,8 @@ def can_sync() -> bool:
 
 async def is_empty() -> bool:
     """Check if the historical_events table is empty."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        row = await db.execute_fetchall(
-            "SELECT COUNT(*) FROM historical_events"
-        )
-        return row[0][0] == 0
+    db = await get_db()
+    row = await db.execute_fetchall(
+        "SELECT COUNT(*) FROM historical_events"
+    )
+    return row[0][0] == 0

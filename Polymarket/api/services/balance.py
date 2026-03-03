@@ -13,6 +13,7 @@ DB_PATH = settings.db_path
 # WAL mode handles concurrent reads; lock prevents write contention.
 _db: aiosqlite.Connection | None = None
 _write_lock = asyncio.Lock()
+_init_lock = asyncio.Lock()
 
 
 def _secure_db_file(path: str):
@@ -33,11 +34,16 @@ def _secure_db_file(path: str):
 async def get_db() -> aiosqlite.Connection:
     """Get or create the shared DB connection."""
     global _db
-    if _db is None:
-        _db = await aiosqlite.connect(DB_PATH)
-        await _db.execute("PRAGMA journal_mode=WAL")
-        await _db.execute("PRAGMA busy_timeout=5000")
-        _secure_db_file(DB_PATH)
+    if _db is not None:
+        return _db
+    async with _init_lock:
+        if _db is None:
+            # Use local var — don't assign global until PRAGMAs are done
+            conn = await aiosqlite.connect(DB_PATH)
+            await conn.execute("PRAGMA journal_mode=WAL")
+            await conn.execute("PRAGMA busy_timeout=5000")
+            _secure_db_file(DB_PATH)
+            _db = conn
     return _db
 
 
@@ -249,6 +255,27 @@ async def consume(wallet_address: str, amount: int, endpoint: str) -> bool:
         return True
 
 
+async def refund(wallet_address: str, amount: int, endpoint: str):
+    """Refund a consumed amount back to the wallet (decrement total_consumed).
+
+    Unlike credit_deposit(), this correctly reverses a consumption without
+    inflating total_deposited.
+    """
+    addr = wallet_address.lower()
+    db = await get_db()
+    async with _write_lock:
+        await db.execute(
+            """UPDATE balances SET total_consumed = MAX(0, total_consumed - ?)
+               WHERE wallet_address = ?""",
+            (amount, addr),
+        )
+        await db.execute(
+            "INSERT INTO usage_log (wallet_address, amount, endpoint, timestamp) VALUES (?, ?, ?, ?)",
+            (addr, -amount, f"refund:{endpoint}", time.time()),
+        )
+        await db.commit()
+
+
 async def is_tx_used(tx_hash: str) -> bool:
     """Check if a transaction hash has already been used for payment."""
     db = await get_db()
@@ -312,16 +339,22 @@ def calls_remaining(remaining_wei: int) -> int:
 # === L2 Credentials Cache (encrypted at rest) ===
 
 
-def _get_fernet():
-    """Get Fernet cipher for encrypting L2 credentials. Returns None if no key configured."""
-    key = settings.l2_encryption_key
+_fernet_cache: dict[str, object] = {}  # key_str -> Fernet instance
+
+
+def _get_fernet(key: str | None = None):
+    """Get (cached) Fernet cipher. Returns None if no key configured."""
+    if key is None:
+        key = settings.l2_encryption_key
     if not key:
         return None
-    try:
-        from cryptography.fernet import Fernet
-        return Fernet(key.encode() if isinstance(key, str) else key)
-    except Exception:
-        return None
+    if key not in _fernet_cache:
+        try:
+            from cryptography.fernet import Fernet
+            _fernet_cache[key] = Fernet(key.encode() if isinstance(key, str) else key)
+        except Exception:
+            return None
+    return _fernet_cache[key]
 
 
 def _encrypt(value: str) -> str:
@@ -333,14 +366,34 @@ def _encrypt(value: str) -> str:
 
 
 def _decrypt(value: str) -> str:
-    """Decrypt a string if encryption key is available, otherwise return as-is."""
+    """Decrypt a string if encryption key is available, otherwise return as-is.
+
+    Detects Fernet tokens (prefix 'gAAAAAB') to distinguish encrypted values
+    from legacy plaintext. If value IS encrypted but cannot be decrypted,
+    raises ValueError instead of returning garbage.
+    """
     f = _get_fernet()
     if f is None:
         return value
     try:
         return f.decrypt(value.encode()).decode()
     except Exception:
-        # Likely stored before encryption was enabled — return raw
+        # Try old encryption key if configured (supports key rotation)
+        old_key = getattr(settings, "l2_encryption_key_old", None)
+        if old_key:
+            try:
+                old_f = _get_fernet(old_key)
+                if old_f:
+                    return old_f.decrypt(value.encode()).decode()
+            except Exception:
+                pass
+        # If value looks like a Fernet token, it IS encrypted — don't return garbage
+        if value.startswith("gAAAAAB"):
+            raise ValueError(
+                "Cannot decrypt value: encryption key mismatch. "
+                "Check L2_ENCRYPTION_KEY (and L2_ENCRYPTION_KEY_OLD for rotation)."
+            )
+        # Likely stored before encryption was enabled — return raw plaintext
         return value
 
 

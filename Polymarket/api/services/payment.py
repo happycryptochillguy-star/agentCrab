@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import re
+import threading
 import time
 
 from eth_abi import encode as abi_encode
@@ -10,6 +11,11 @@ from web3 import Web3
 
 from api.config import settings
 from api.services import balance as balance_svc
+
+# Thread lock for web3 RPC calls — web3.py's HTTPProvider uses requests.Session
+# which is NOT thread-safe. All to_thread() calls sharing global singletons
+# must serialize through this lock.
+_w3_lock = threading.Lock()
 
 _ETH_ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
@@ -21,6 +27,7 @@ logger = logging.getLogger("agentcrab.payment")
 _used_signatures: dict[str, float] = {}
 _SIG_CLEANUP_INTERVAL = 60  # seconds
 _sig_last_cleanup = 0.0
+_MAX_USED_SIGNATURES = 10000  # emergency cap to prevent OOM
 
 # ABI fragments we need
 PAYMENT_ABI = json.loads("""[
@@ -147,6 +154,11 @@ def verify_signature(wallet_address: str, message: str, signature: str) -> bool:
             expired = [k for k, exp in _used_signatures.items() if now > exp]
             for k in expired:
                 del _used_signatures[k]
+            # Emergency cap: if still too large after cleanup, drop oldest half
+            if len(_used_signatures) > _MAX_USED_SIGNATURES:
+                sorted_keys = sorted(_used_signatures, key=_used_signatures.get)
+                for k in sorted_keys[:len(_used_signatures) // 2]:
+                    del _used_signatures[k]
 
         return True
     except Exception as e:
@@ -190,7 +202,7 @@ async def verify_direct_payment(tx_hash: str, wallet_address: str) -> bool:
             return False
 
         result = await asyncio.to_thread(
-            _verify_direct_payment_sync, tx_hash, wallet_address
+            _locked, _verify_direct_payment_sync, tx_hash, wallet_address
         )
         if result is True:
             return True
@@ -226,7 +238,7 @@ async def sync_balance(wallet_address: str):
     call (no eth_getLogs) so it works with any RPC provider.
     """
     try:
-        on_chain = await asyncio.to_thread(_get_on_chain_balance, wallet_address)
+        on_chain = await asyncio.to_thread(_locked, _get_on_chain_balance, wallet_address)
         local_deposited, _, _ = await balance_svc.get_remaining(wallet_address)
 
         if on_chain > local_deposited:
@@ -495,7 +507,7 @@ def get_polygon_usdc_balance(address: str) -> int:
 
 async def get_polygon_usdc_balance_async(address: str) -> int:
     """Get USDC.e balance on Polygon without blocking the event loop."""
-    return await asyncio.to_thread(_get_polygon_usdc_balance_sync, address)
+    return await asyncio.to_thread(_locked, _get_polygon_usdc_balance_sync, address)
 
 
 def build_polygon_usdc_transfer_tx(
@@ -637,39 +649,45 @@ def _broadcast_signed_txs_sync(signed_raw_txs: list[str], chain: str = "bsc") ->
 
 async def broadcast_signed_tx(signed_raw_tx: str, chain: str = "bsc") -> str:
     """Broadcast a signed transaction without blocking the event loop."""
-    return await asyncio.to_thread(_broadcast_signed_tx_sync, signed_raw_tx, chain)
+    return await asyncio.to_thread(_locked, _broadcast_signed_tx_sync, signed_raw_tx, chain)
 
 
 async def broadcast_signed_txs(signed_raw_txs: list[str], chain: str = "bsc") -> list[str]:
     """Broadcast multiple signed transactions without blocking the event loop."""
-    return await asyncio.to_thread(_broadcast_signed_txs_sync, signed_raw_txs, chain)
+    return await asyncio.to_thread(_locked, _broadcast_signed_txs_sync, signed_raw_txs, chain)
 
 
 # === Async wrappers for tx builders (they make sync RPC calls) ===
 
 
+def _locked(fn, *args, **kwargs):
+    """Run a synchronous function holding the web3 thread lock."""
+    with _w3_lock:
+        return fn(*args, **kwargs)
+
+
 async def build_deposit_txs_async(wallet_address: str, amount_wei: int) -> list[dict]:
     """Non-blocking wrapper for build_deposit_txs."""
-    return await asyncio.to_thread(build_deposit_txs, wallet_address, amount_wei)
+    return await asyncio.to_thread(_locked, build_deposit_txs, wallet_address, amount_wei)
 
 
 async def build_pay_tx_async(wallet_address: str) -> list[dict]:
     """Non-blocking wrapper for build_pay_tx."""
-    return await asyncio.to_thread(build_pay_tx, wallet_address)
+    return await asyncio.to_thread(_locked, build_pay_tx, wallet_address)
 
 
 async def build_usdt_transfer_tx_async(wallet_address: str, to_address: str, amount_wei: int) -> list[dict]:
     """Non-blocking wrapper for build_usdt_transfer_tx."""
-    return await asyncio.to_thread(build_usdt_transfer_tx, wallet_address, to_address, amount_wei)
+    return await asyncio.to_thread(_locked, build_usdt_transfer_tx, wallet_address, to_address, amount_wei)
 
 
 async def build_polygon_approval_txs_async(wallet_address: str) -> list[dict]:
     """Non-blocking wrapper for build_polygon_approval_txs."""
-    return await asyncio.to_thread(build_polygon_approval_txs, wallet_address)
+    return await asyncio.to_thread(_locked, build_polygon_approval_txs, wallet_address)
 
 
 async def build_polygon_usdc_transfer_tx_async(
     wallet_address: str, to_address: str, amount_wei: int,
 ) -> list[dict]:
     """Non-blocking wrapper for build_polygon_usdc_transfer_tx."""
-    return await asyncio.to_thread(build_polygon_usdc_transfer_tx, wallet_address, to_address, amount_wei)
+    return await asyncio.to_thread(_locked, build_polygon_usdc_transfer_tx, wallet_address, to_address, amount_wei)

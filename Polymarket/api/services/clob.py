@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 
 import httpx
 from eth_utils import to_checksum_address
+from fastapi import HTTPException
 
 from api.config import settings
 from api.services.http_pool import get_proxy_client
@@ -22,9 +23,28 @@ from api.models import (
     PriceSummary,
     OrderRequest,
     OrderResponse,
+    ErrorResponse,
 )
 
 logger = logging.getLogger("agentcrab.clob")
+
+
+def _raise_clob_error(resp: httpx.Response, context: str = "CLOB request"):
+    """Raise HTTPException with CLOB's actual error message instead of generic status."""
+    if resp.status_code < 400:
+        return
+    try:
+        detail = resp.json()
+        msg = detail if isinstance(detail, str) else detail.get("error", detail.get("message", resp.text[:300]))
+    except Exception:
+        msg = resp.text[:300]
+    raise HTTPException(
+        status_code=resp.status_code,
+        detail=ErrorResponse(
+            error_code="CLOB_ERROR",
+            message=f"{context}: {msg}",
+        ).model_dump(),
+    )
 
 
 # === L0 Public Endpoints ===
@@ -234,16 +254,15 @@ async def place_order(
     poly_address: str,
 ) -> OrderResponse:
     """Place an order on Polymarket CLOB using L2 credentials."""
-    import json
-
-    body = json.dumps({
+    # Compact JSON (no spaces) — MUST match SDK for HMAC to verify
+    body = _json.dumps({
         "tokenID": order.token_id,
         "side": order.side.upper(),
         "size": str(order.size),
         "price": str(order.price),
         "type": order.order_type,
         "expiration": order.expiration or "0",
-    })
+    }, separators=(",", ":"), ensure_ascii=False)
 
     headers = _build_l2_headers(api_key, secret, passphrase, poly_address, "POST", "/order", body)
     headers["Content-Type"] = "application/json"
@@ -254,7 +273,7 @@ async def place_order(
         headers=headers,
         content=body,
     )
-    resp.raise_for_status()
+    _raise_clob_error(resp, "Place order")
     data = resp.json()
 
     return OrderResponse(
@@ -276,8 +295,7 @@ async def cancel_order(
     poly_address: str,
 ) -> dict:
     """Cancel a single order."""
-    import json
-    body = json.dumps({"orderID": order_id})
+    body = _json.dumps({"orderID": order_id}, separators=(",", ":"), ensure_ascii=False)
 
     headers = _build_l2_headers(api_key, secret, passphrase, poly_address, "DELETE", "/order", body)
     headers["Content-Type"] = "application/json"
@@ -289,7 +307,7 @@ async def cancel_order(
         headers=headers,
         content=body,
     )
-    resp.raise_for_status()
+    _raise_clob_error(resp, "Cancel order")
     return resp.json()
 
 
@@ -308,7 +326,7 @@ async def cancel_all_orders(
         f"{settings.clob_api_url}/cancel-all",
         headers=headers,
     )
-    resp.raise_for_status()
+    _raise_clob_error(resp, "Cancel all orders")
     return resp.json()
 
 
@@ -333,7 +351,7 @@ async def get_open_orders(
         headers=headers,
         params=params,
     )
-    resp.raise_for_status()
+    _raise_clob_error(resp, "Get open orders")
     data = resp.json()
 
     # CLOB returns paginated {data, next_cursor, limit, count}
@@ -420,7 +438,7 @@ async def derive_api_credentials(
         f"{settings.clob_api_url}/auth/derive-api-key",
         headers=headers,
     )
-    resp.raise_for_status()
+    _raise_clob_error(resp, "Derive API key")
     return resp.json()
 
 
@@ -428,9 +446,8 @@ async def derive_api_credentials(
 
 
 def _generate_salt() -> int:
-    """Generate random salt for order uniqueness (matches SDK)."""
-    now = datetime.now(tz=timezone.utc).timestamp()
-    return round(now * random.random())
+    """Generate random salt for order uniqueness."""
+    return random.randint(1, 2**128)
 
 
 def _round_down(val: float, decimals: int) -> float:
@@ -661,7 +678,7 @@ async def post_signed_order(
         headers=headers,
         content=body,
     )
-    resp.raise_for_status()
+    _raise_clob_error(resp, "Submit order")
     return resp.json()
 
 

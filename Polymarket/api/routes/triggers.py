@@ -1,5 +1,6 @@
 """Trigger endpoints — stop loss / take profit with pre-signed orders."""
 
+import base64
 import logging
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
@@ -25,6 +26,26 @@ def _get_poly_creds(
     x_poly_secret: str = Header(..., alias="X-Poly-Secret"),
     x_poly_passphrase: str = Header(..., alias="X-Poly-Passphrase"),
 ) -> dict:
+    # Validate non-empty
+    if not x_poly_api_key or not x_poly_secret or not x_poly_passphrase:
+        raise HTTPException(
+            status_code=400,
+            detail=ErrorResponse(
+                error_code="INVALID_CREDENTIALS",
+                message="X-Poly-Api-Key, X-Poly-Secret, and X-Poly-Passphrase headers must all be non-empty.",
+            ).model_dump(),
+        )
+    # Validate base64 format for secret
+    try:
+        base64.urlsafe_b64decode(x_poly_secret)
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail=ErrorResponse(
+                error_code="INVALID_CREDENTIALS",
+                message="X-Poly-Secret is not valid base64. Check your L2 credentials.",
+            ).model_dump(),
+        )
     return {
         "api_key": x_poly_api_key,
         "secret": x_poly_secret,
@@ -57,6 +78,33 @@ async def prepare_trigger(
             detail=ErrorResponse(
                 error_code="INVALID_SIDE",
                 message="exit_side must be 'BUY' or 'SELL'.",
+            ).model_dump(),
+        )
+
+    if req.trigger_price < 0.001 or req.trigger_price > 0.999:
+        raise HTTPException(
+            status_code=400,
+            detail=ErrorResponse(
+                error_code="INVALID_TRIGGER_PRICE",
+                message="trigger_price must be between 0.001 and 0.999.",
+            ).model_dump(),
+        )
+
+    if req.size <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail=ErrorResponse(
+                error_code="INVALID_SIZE",
+                message="size must be positive.",
+            ).model_dump(),
+        )
+
+    if req.exit_price < 0.001 or req.exit_price > 0.999:
+        raise HTTPException(
+            status_code=400,
+            detail=ErrorResponse(
+                error_code="INVALID_EXIT_PRICE",
+                message="exit_price must be between 0.001 and 0.999.",
             ).model_dump(),
         )
 

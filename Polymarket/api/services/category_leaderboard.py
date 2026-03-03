@@ -10,17 +10,15 @@ import json
 import logging
 import time
 
-import aiosqlite
 import httpx
 
 from api.config import settings
 from api.services.categories import CATEGORIES
 from api.services.history import match_category
 from api.services import leaderboard as lb_svc
+from api.services.balance import get_db, _write_lock
 
 logger = logging.getLogger("agentcrab.category_lb")
-
-DB_PATH = settings.db_path
 
 # Sync throttle
 _last_sync_time: float = 0.0
@@ -45,12 +43,12 @@ async def _get_cached_categories(slugs: list[str]) -> dict[str, str | None]:
     """Look up cached market_slug → category_path mappings."""
     if not slugs:
         return {}
-    async with aiosqlite.connect(DB_PATH) as db:
-        placeholders = ",".join("?" for _ in slugs)
-        rows = await db.execute_fetchall(
-            f"SELECT market_slug, category_path FROM market_category_map WHERE market_slug IN ({placeholders})",
-            slugs,
-        )
+    db = await get_db()
+    placeholders = ",".join("?" for _ in slugs)
+    rows = await db.execute_fetchall(
+        f"SELECT market_slug, category_path FROM market_category_map WHERE market_slug IN ({placeholders})",
+        slugs,
+    )
     return {r[0]: r[1] for r in rows}
 
 
@@ -62,7 +60,8 @@ async def _save_market_mapping(
     event_id: str | None = None,
     volume: float | None = None,
 ):
-    async with aiosqlite.connect(DB_PATH) as db:
+    db = await get_db()
+    async with _write_lock:
         await db.execute(
             """INSERT OR REPLACE INTO market_category_map
                (market_slug, category_path, tags, question, event_id, volume, mapped_at)
@@ -306,7 +305,8 @@ async def sync_category_leaderboard(top_n: int = 200) -> dict:
             now,
         ))
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    db = await get_db()
+    async with _write_lock:
         await db.execute("DELETE FROM category_leaderboard")
         await db.execute("DELETE FROM trader_category_positions")
 
@@ -372,36 +372,38 @@ async def get_category_leaderboard(
     }
     order = sort_col_map.get(sort_by, "total_pnl DESC")
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    db = await get_db()
 
-        # Total count
-        row = await db.execute_fetchall(
-            "SELECT COUNT(*) FROM category_leaderboard WHERE category_path = ?",
-            (category_path,),
-        )
-        total_count = row[0][0] if row else 0
+    # Total count
+    row = await db.execute_fetchall(
+        "SELECT COUNT(*) FROM category_leaderboard WHERE category_path = ?",
+        (category_path,),
+    )
+    total_count = row[0][0] if row else 0
 
-        # Last synced
-        row = await db.execute_fetchall(
-            "SELECT MAX(synced_at) FROM category_leaderboard WHERE category_path = ?",
-            (category_path,),
-        )
-        last_synced = row[0][0] if row and row[0][0] else None
+    # Last synced
+    row = await db.execute_fetchall(
+        "SELECT MAX(synced_at) FROM category_leaderboard WHERE category_path = ?",
+        (category_path,),
+    )
+    last_synced = row[0][0] if row and row[0][0] else None
 
-        # Entries
-        rows = await db.execute_fetchall(
-            f"""SELECT address, display_name, total_positions, total_pnl,
-                       total_volume, win_rate, best_pnl_market, best_pnl_value
-                FROM category_leaderboard
-                WHERE category_path = ?
-                ORDER BY {order}
-                LIMIT ? OFFSET ?""",
-            (category_path, limit, offset),
-        )
+    # Entries
+    cursor = await db.execute(
+        f"""SELECT address, display_name, total_positions, total_pnl,
+                   total_volume, win_rate, best_pnl_market, best_pnl_value
+            FROM category_leaderboard
+            WHERE category_path = ?
+            ORDER BY {order}
+            LIMIT ? OFFSET ?""",
+        (category_path, limit, offset),
+    )
+    rows = await cursor.fetchall()
+    cols = [col[0] for col in cursor.description]
 
     entries = []
-    for i, r in enumerate(rows):
+    for i, row_tuple in enumerate(rows):
+        r = dict(zip(cols, row_tuple))
         entries.append({
             "rank": offset + i + 1,
             "address": r["address"],
@@ -430,32 +432,32 @@ async def get_trader_category_profile(
     If category_path is None, returns all categories this trader has data for.
     If category_path is set, returns that category's stats + position list.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    db = await get_db()
 
-        if category_path:
-            # Single category stats
-            rows = await db.execute_fetchall(
-                """SELECT category_path, total_positions, total_pnl, total_volume,
-                          win_rate, best_pnl_market, best_pnl_value, display_name
-                   FROM category_leaderboard
-                   WHERE address = ? AND category_path = ?""",
-                (address, category_path),
-            )
-        else:
-            # All categories for this trader
-            rows = await db.execute_fetchall(
-                """SELECT category_path, total_positions, total_pnl, total_volume,
-                          win_rate, best_pnl_market, best_pnl_value, display_name
-                   FROM category_leaderboard
-                   WHERE address = ?
-                   ORDER BY total_pnl DESC""",
-                (address,),
-            )
+    if category_path:
+        cursor = await db.execute(
+            """SELECT category_path, total_positions, total_pnl, total_volume,
+                      win_rate, best_pnl_market, best_pnl_value, display_name
+               FROM category_leaderboard
+               WHERE address = ? AND category_path = ?""",
+            (address, category_path),
+        )
+    else:
+        cursor = await db.execute(
+            """SELECT category_path, total_positions, total_pnl, total_volume,
+                      win_rate, best_pnl_market, best_pnl_value, display_name
+               FROM category_leaderboard
+               WHERE address = ?
+               ORDER BY total_pnl DESC""",
+            (address,),
+        )
+    rows = await cursor.fetchall()
+    cols = [col[0] for col in cursor.description]
 
     display_name = None
     categories = []
-    for r in rows:
+    for row_tuple in rows:
+        r = dict(zip(cols, row_tuple))
         if not display_name:
             display_name = r["display_name"]
         categories.append({
@@ -483,52 +485,53 @@ async def get_trader_category_profile(
 
 
 async def _get_trader_positions(address: str, category_path: str) -> list[dict]:
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        rows = await db.execute_fetchall(
-            """SELECT market_slug, question, outcome, token_id, size,
-                      avg_price, current_price, pnl, pnl_percent
-               FROM trader_category_positions
-               WHERE address = ? AND category_path = ?
-               ORDER BY CAST(pnl AS REAL) DESC""",
-            (address, category_path),
-        )
-    return [dict(r) for r in rows]
+    db = await get_db()
+    cursor = await db.execute(
+        """SELECT market_slug, question, outcome, token_id, size,
+                  avg_price, current_price, pnl, pnl_percent
+           FROM trader_category_positions
+           WHERE address = ? AND category_path = ?
+           ORDER BY CAST(pnl AS REAL) DESC""",
+        (address, category_path),
+    )
+    rows = await cursor.fetchall()
+    cols = [col[0] for col in cursor.description]
+    return [dict(zip(cols, row)) for row in rows]
 
 
 async def get_category_stats(category_path: str) -> dict:
     """Aggregate stats for a category: total traders, volume, avg PnL, best/worst."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        row = await db.execute_fetchall(
-            """SELECT COUNT(*), SUM(total_volume), AVG(total_pnl),
-                      MAX(total_pnl), MIN(total_pnl)
-               FROM category_leaderboard
-               WHERE category_path = ?""",
-            (category_path,),
-        )
+    db = await get_db()
+    row = await db.execute_fetchall(
+        """SELECT COUNT(*), SUM(total_volume), AVG(total_pnl),
+                  MAX(total_pnl), MIN(total_pnl)
+           FROM category_leaderboard
+           WHERE category_path = ?""",
+        (category_path,),
+    )
 
-        if not row or row[0][0] == 0:
-            return {
-                "category_path": category_path,
-                "total_traders": 0,
-                "total_volume": 0,
-                "avg_pnl": 0,
-                "best_trader_address": None,
-                "best_trader_pnl": None,
-                "worst_trader_pnl": None,
-            }
+    if not row or row[0][0] == 0:
+        return {
+            "category_path": category_path,
+            "total_traders": 0,
+            "total_volume": 0,
+            "avg_pnl": 0,
+            "best_trader_address": None,
+            "best_trader_pnl": None,
+            "worst_trader_pnl": None,
+        }
 
-        total_traders, total_volume, avg_pnl, best_pnl, worst_pnl = row[0]
+    total_traders, total_volume, avg_pnl, best_pnl, worst_pnl = row[0]
 
-        # Get best and worst trader addresses
-        best_row = await db.execute_fetchall(
-            "SELECT address FROM category_leaderboard WHERE category_path = ? ORDER BY total_pnl DESC LIMIT 1",
-            (category_path,),
-        )
-        worst_row = await db.execute_fetchall(
-            "SELECT address FROM category_leaderboard WHERE category_path = ? ORDER BY total_pnl ASC LIMIT 1",
-            (category_path,),
-        )
+    # Get best and worst trader addresses
+    best_row = await db.execute_fetchall(
+        "SELECT address FROM category_leaderboard WHERE category_path = ? ORDER BY total_pnl DESC LIMIT 1",
+        (category_path,),
+    )
+    worst_row = await db.execute_fetchall(
+        "SELECT address FROM category_leaderboard WHERE category_path = ? ORDER BY total_pnl ASC LIMIT 1",
+        (category_path,),
+    )
 
     return {
         "category_path": category_path,
@@ -549,18 +552,18 @@ def can_sync() -> bool:
 
 async def get_sync_status() -> dict:
     """Return current sync status info."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        row = await db.execute_fetchall("SELECT COUNT(*) FROM category_leaderboard")
-        lb_count = row[0][0] if row else 0
+    db = await get_db()
+    row = await db.execute_fetchall("SELECT COUNT(*) FROM category_leaderboard")
+    lb_count = row[0][0] if row else 0
 
-        row = await db.execute_fetchall("SELECT COUNT(*) FROM trader_category_positions")
-        pos_count = row[0][0] if row else 0
+    row = await db.execute_fetchall("SELECT COUNT(*) FROM trader_category_positions")
+    pos_count = row[0][0] if row else 0
 
-        row = await db.execute_fetchall("SELECT COUNT(*) FROM market_category_map")
-        map_count = row[0][0] if row else 0
+    row = await db.execute_fetchall("SELECT COUNT(*) FROM market_category_map")
+    map_count = row[0][0] if row else 0
 
-        row = await db.execute_fetchall("SELECT MAX(synced_at) FROM category_leaderboard")
-        last_synced = row[0][0] if row and row[0][0] else None
+    row = await db.execute_fetchall("SELECT MAX(synced_at) FROM category_leaderboard")
+    last_synced = row[0][0] if row and row[0][0] else None
 
     return {
         "leaderboard_entries": lb_count,

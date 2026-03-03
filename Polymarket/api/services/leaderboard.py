@@ -12,35 +12,47 @@ logger = logging.getLogger("agentcrab.leaderboard")
 
 
 async def get_leaderboard(limit: int = 20, offset: int = 0) -> list[LeaderboardEntry]:
-    """Get top traders leaderboard."""
+    """Get top traders leaderboard. Paginates automatically if limit > 50."""
     client = get_proxy_client()
-    resp = await client.get(
-        f"{settings.data_api_url}/v1/leaderboard",
-        params={
-            "category": "OVERALL",
-            "timePeriod": "ALL",
-            "orderBy": "PNL",
-            "limit": min(limit, 50),
-            "offset": offset,
-        },
-    )
-    resp.raise_for_status()
-    raw = resp.json()
+    page_size = 50  # Data API max per request
+    all_entries: list[LeaderboardEntry] = []
+    current_offset = offset
 
-    entries: list[LeaderboardEntry] = []
-    for r in raw:
-        entries.append(
-            LeaderboardEntry(
-                rank=int(r.get("rank", 0)),
-                address=r.get("proxyWallet", ""),
-                display_name=r.get("userName") or r.get("pseudonym"),
-                volume=str(r.get("vol", "")) or None,
-                pnl=str(r.get("pnl", "")) or None,
-                positions_count=None,
-                trades_count=None,
-            )
+    while len(all_entries) < limit:
+        fetch_limit = min(page_size, limit - len(all_entries))
+        resp = await client.get(
+            f"{settings.data_api_url}/v1/leaderboard",
+            params={
+                "category": "OVERALL",
+                "timePeriod": "ALL",
+                "orderBy": "PNL",
+                "limit": fetch_limit,
+                "offset": current_offset,
+            },
         )
-    return entries
+        resp.raise_for_status()
+        raw = resp.json()
+        if not raw:
+            break  # No more results
+
+        for r in raw:
+            all_entries.append(
+                LeaderboardEntry(
+                    rank=int(r.get("rank", 0)),
+                    address=r.get("proxyWallet", ""),
+                    display_name=r.get("userName") or r.get("pseudonym"),
+                    volume=str(r.get("vol", "")) or None,
+                    pnl=str(r.get("pnl", "")) or None,
+                    positions_count=None,
+                    trades_count=None,
+                )
+            )
+
+        if len(raw) < fetch_limit:
+            break  # Last page
+        current_offset += len(raw)
+
+    return all_entries
 
 
 async def get_trader_positions(address: str) -> list[Position]:
