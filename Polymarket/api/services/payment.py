@@ -128,9 +128,10 @@ def verify_signature(wallet_address: str, message: str, signature: str) -> bool:
         return False
 
 
-def _verify_direct_payment_sync(tx_hash: str, wallet_address: str) -> bool | None:
-    """Sync part of direct payment verification (RPC calls). Returns True/False/None.
-    None means 'need async follow-up' (mark tx used)."""
+def _verify_direct_payment_sync(tx_hash: str, wallet_address: str) -> bool:
+    """Sync part of direct payment verification (RPC calls).
+    Checks that DirectPayment event exists, is from the correct wallet,
+    and the amount is >= the required payment amount."""
     w3 = get_w3()
     receipt = w3.eth.get_transaction_receipt(tx_hash)
     if receipt is None or receipt["status"] != 1:
@@ -139,16 +140,26 @@ def _verify_direct_payment_sync(tx_hash: str, wallet_address: str) -> bool | Non
     contract = get_contract()
     logs = contract.events.DirectPayment().process_receipt(receipt)
     for log in logs:
-        if log["args"]["user"].lower() == wallet_address.lower():
+        if (
+            log["args"]["user"].lower() == wallet_address.lower()
+            and log["args"]["amount"] >= settings.payment_amount_wei
+        ):
             return True
     return False
 
 
 async def verify_direct_payment(tx_hash: str, wallet_address: str) -> bool:
-    """Verify a DirectPayment event in a BSC transaction receipt. Rejects replayed tx hashes."""
+    """Verify a DirectPayment event in a BSC transaction receipt. Rejects replayed tx hashes.
+
+    Uses atomic tx hash claiming (try_claim_tx_hash) to prevent TOCTOU double-spend:
+    1. Atomically claim the tx hash (INSERT with UNIQUE constraint)
+    2. If claimed, verify on-chain
+    3. If verification fails, release the claim
+    """
     try:
-        # Reject already-used tx hashes
-        if await balance_svc.is_tx_used(tx_hash):
+        # Atomically claim tx hash — prevents concurrent double-spend
+        claimed = await balance_svc.try_claim_tx_hash(tx_hash, wallet_address)
+        if not claimed:
             logger.warning("Rejected replayed tx hash: %s", tx_hash)
             return False
 
@@ -156,8 +167,17 @@ async def verify_direct_payment(tx_hash: str, wallet_address: str) -> bool:
             _verify_direct_payment_sync, tx_hash, wallet_address
         )
         if result is True:
-            await balance_svc.mark_tx_used(tx_hash, wallet_address)
             return True
+
+        # Verification failed — release the claim so user can retry with correct tx
+        # (This is safe: the tx was invalid, so no double-spend risk)
+        logger.info("Releasing claimed tx hash %s (verification failed)", tx_hash[:10])
+        db = await balance_svc.get_db()
+        async with balance_svc._write_lock:
+            await db.execute(
+                "DELETE FROM used_tx_hashes WHERE tx_hash = ?", (tx_hash.lower(),)
+            )
+            await db.commit()
         return False
     except Exception as e:
         logger.warning("Direct payment verification failed: %s", e)

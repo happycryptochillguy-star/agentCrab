@@ -235,17 +235,25 @@ app = FastAPI(
 )
 
 
+# CORS: No wildcard. This is an API-only service (no browser frontend).
+# Only allow requests from our own domain. Agents call via HTTP, not browsers.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
+    allow_origins=["https://agentcrab.ai", "https://api.agentcrab.ai"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
 )
 
 
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
-    client_ip = request.client.host if request.client else "unknown"
+    # Use X-Real-IP (set by nginx) or X-Forwarded-For behind reverse proxy,
+    # fall back to direct client IP for local development.
+    client_ip = (
+        request.headers.get("X-Real-IP")
+        or (request.headers.get("X-Forwarded-For", "").split(",")[0].strip())
+        or (request.client.host if request.client else "unknown")
+    )
     path = request.url.path
     allowed, tier, limit = _check_rate_limit(client_ip, path)
     if not allowed:

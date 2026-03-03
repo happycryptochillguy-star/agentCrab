@@ -116,8 +116,11 @@ async def reload_config(
     # Mask sensitive values in the response
     sensitive = {
         "private_key", "admin_key", "telegram_bot_token",
-        "poly_builder_secret", "poly_builder_passphrase",
-        "fun_xyz_api_key",
+        "poly_builder_api_key", "poly_builder_secret", "poly_builder_passphrase",
+        "fun_xyz_api_key", "fun_xyz_api_url",
+        "bsc_rpc_url", "polygon_rpc_url",  # contain Alchemy API key
+        "relayer_url", "bridge_api_url",
+        "bark_url",
     }
 
     safe_changes: dict[str, dict] = {}

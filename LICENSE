@@ -1,0 +1,20 @@
+Business Source License 1.1
+
+Licensed Work:    agentCrab v0.1
+Licensor:         agentCrab (https://agentcrab.ai)
+Change Date:      2030-01-01
+Change License:   Apache License 2.0
+
+For the full BSL 1.1 text, see: https://mariadb.com/bsl11/
+
+Additional Use Grant:
+
+  You may use the Licensed Work for any purpose EXCEPT offering a
+  hosted service that provides substantially similar functionality
+  to agentCrab to third parties.
+
+Notice:
+
+  Files in the spec/ directory are licensed under CC-BY 4.0.
+  Files in the agentcrab-python/ directory are licensed under MIT.
+  See each directory's own LICENSE file for details.

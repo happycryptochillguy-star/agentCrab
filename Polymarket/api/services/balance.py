@@ -252,6 +252,24 @@ async def mark_tx_used(tx_hash: str, wallet_address: str):
         await db.commit()
 
 
+async def try_claim_tx_hash(tx_hash: str, wallet_address: str) -> bool:
+    """Atomically claim a tx hash. Returns True if successfully claimed (first use).
+    Returns False if already used (duplicate). This is TOCTOU-safe because it uses
+    a single INSERT with UNIQUE constraint — no separate check-then-insert gap."""
+    db = await get_db()
+    async with _write_lock:
+        try:
+            await db.execute(
+                "INSERT INTO used_tx_hashes (tx_hash, wallet_address, timestamp) VALUES (?, ?, ?)",
+                (tx_hash.lower(), wallet_address.lower(), time.time()),
+            )
+            await db.commit()
+            return True
+        except Exception:
+            # UNIQUE constraint violation → already used
+            return False
+
+
 async def get_remaining(wallet_address: str) -> tuple[int, int, int]:
     """Return (total_deposited, total_consumed, remaining) in wei."""
     addr = wallet_address.lower()

@@ -840,13 +840,21 @@ async def submit_batch_order(
             order_results.append(entry)
 
     fail_count = n - success_count
+
+    # Refund only failed orders (proportional, not full refund)
+    if fail_count > 0:
+        refund_wei = fail_count * settings.payment_amount_wei
+        await balance_svc.credit_deposit(wallet_address, refund_wei)
+        payment_svc.invalidate_balance_cache(wallet_address)
+
+    actual_charged = success_count * 0.01
     summary = f"{success_count}/{n} orders submitted successfully."
     if fail_count:
-        summary += f" {fail_count} failed."
+        summary += f" {fail_count} failed (refunded {fail_count} x 0.01 USDT)."
 
     return SuccessResponse(
         summary=summary,
-        data={"results": order_results, "total_charged_usdt": round(n * 0.01, 2)},
+        data={"results": order_results, "total_charged_usdt": round(actual_charged, 2)},
     )
 
 

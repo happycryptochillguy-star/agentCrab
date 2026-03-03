@@ -192,6 +192,16 @@ async def submit_tx(
             ).model_dump(),
         )
 
+    # Batch size limit
+    if req.signed_txs and len(req.signed_txs) > 10:
+        raise HTTPException(
+            status_code=400,
+            detail=ErrorResponse(
+                error_code="BATCH_TOO_LARGE",
+                message="Maximum 10 transactions per batch.",
+            ).model_dump(),
+        )
+
     # Batch mode
     if req.signed_txs:
         try:
