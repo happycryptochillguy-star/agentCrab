@@ -23,6 +23,13 @@ Polymarket/contracts/out/
 Polymarket/contracts/cache/
 Polymarket/contracts/broadcast/
 
+# $CRAB token contracts (not public until deployment)
+Polymarket/contracts/src/CrabToken.sol
+Polymarket/contracts/src/CrabAirdrop.sol
+Polymarket/contracts/script/DeployToken.s.sol
+Polymarket/contracts/test/CrabToken.t.sol
+Polymarket/contracts/test/CrabAirdrop.t.sol
+
 # Python build artifacts
 dist/
 *.egg-info/

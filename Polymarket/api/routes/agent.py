@@ -85,6 +85,22 @@ async def get_capabilities():
                         "description": "Get all raw Polymarket tags (use /markets/categories for organized browsing).",
                     },
                     {
+                        "path": "/token/info",
+                        "method": "GET",
+                        "description": "$CRAB token info: tokenomics, points rules, airdrop details, current stats. No auth needed.",
+                    },
+                    {
+                        "path": "/token/points/leaderboard",
+                        "method": "GET",
+                        "description": "Points leaderboard — top users ranked by total points. No auth needed.",
+                        "params": {"limit": "int (1-100)", "offset": "int"},
+                    },
+                    {
+                        "path": "/token/points",
+                        "method": "GET",
+                        "description": "Your $CRAB airdrop points breakdown (deposit + usage). Auth required, no payment.",
+                    },
+                    {
                         "path": "/trading/setup",
                         "method": "GET",
                         "description": "Polymarket trading setup guide (L2 credential derivation).",

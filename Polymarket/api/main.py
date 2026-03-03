@@ -17,6 +17,7 @@ from api.services import http_pool
 from api.routes import agent, payment, deposit, markets, orderbook, positions, traders, trading, category_leaderboard
 from api.routes import admin as admin_routes
 from api.routes import triggers as triggers_routes
+from api.routes import token as token_routes
 from api.services import category_leaderboard as cat_lb_svc
 from api.services import health as health_svc
 from api.services import triggers as trigger_svc
@@ -67,6 +68,9 @@ _TIER_RULES: list[tuple[str, str]] = [
     ("/polymarket/trading/setup", "open"),
     ("/polymarket/trading/contracts", "open"),
     ("/polymarket/deposit/supported-assets", "open"),
+    ("/polymarket/token/info", "open"),
+    ("/polymarket/token/points/leaderboard", "open"),
+    ("/polymarket/token/points", "auth"),
     ("/health", "open"),
     # prepare-*, credentials, and trigger query endpoints are free (auth only)
     ("/polymarket/payment/wallet-balance", "auth"),
@@ -372,6 +376,7 @@ polymarket_router.include_router(traders.router)
 polymarket_router.include_router(trading.router)
 polymarket_router.include_router(triggers_routes.router)
 polymarket_router.include_router(category_leaderboard.router)
+polymarket_router.include_router(token_routes.router)
 
 app.include_router(polymarket_router)
 

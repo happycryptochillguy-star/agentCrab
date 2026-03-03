@@ -16,6 +16,7 @@ from ._types import (
     Market,
     Orderbook,
     OrderResult,
+    Points,
     Position,
     Price,
     SetupResult,
@@ -125,6 +126,39 @@ class AgentCrab:
     def get_wallet_balance(self) -> dict:
         """Get BSC wallet balance (USDT + BNB). Free, auth only."""
         resp = self._http.get("/payment/wallet-balance")
+        return _extract_data(resp)
+
+    # ------------------------------------------------------------------
+    # $CRAB Token & Points
+    # ------------------------------------------------------------------
+
+    def get_points(self) -> Points:
+        """Get your $CRAB airdrop points breakdown (deposit + usage)."""
+        resp = self._http.get("/token/points")
+        d = _extract_data(resp)
+        return Points(
+            wallet_address=d.get("wallet_address", self.address),
+            deposit_points=d.get("deposit_points", 0),
+            usage_points=d.get("usage_points", 0),
+            bonus_points=d.get("bonus_points", 0),
+            total_points=d.get("total_points", 0),
+            total_deposited_usdt=d.get("total_deposited_usdt", 0.0),
+            total_consumed_usdt=d.get("total_consumed_usdt", 0.0),
+            raw=d,
+        )
+
+    def get_points_leaderboard(self, limit: int = 20, offset: int = 0) -> dict:
+        """Get the points leaderboard (free, no auth)."""
+        resp = self._http.get(
+            "/token/points/leaderboard",
+            params={"limit": limit, "offset": offset},
+            auth=False,
+        )
+        return _extract_data(resp)
+
+    def get_token_info(self) -> dict:
+        """Get $CRAB token info, rules, and stats (free, no auth)."""
+        resp = self._http.get("/token/info", auth=False)
         return _extract_data(resp)
 
     def get_trading_status(self) -> dict:

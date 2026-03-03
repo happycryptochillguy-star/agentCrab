@@ -67,6 +67,10 @@ class Settings(BaseSettings):
     # Admin
     admin_key: str = ""
 
+    # $CRAB token
+    crab_token_address: str = ""  # BSC BEP-20 contract (set after deployment)
+    crab_airdrop_address: str = ""  # BSC Merkle airdrop contract
+
     # Logging
     log_level: str = "INFO"  # DEBUG, INFO, WARNING, ERROR
 

@@ -184,6 +184,19 @@ class Activity:
 
 
 @dataclass
+class Points:
+    """$CRAB airdrop points for a wallet."""
+    wallet_address: str
+    deposit_points: int
+    usage_points: int
+    bonus_points: int = 0
+    total_points: int = 0
+    total_deposited_usdt: float = 0.0
+    total_consumed_usdt: float = 0.0
+    raw: dict = field(default_factory=dict, repr=False)
+
+
+@dataclass
 class HistoricalEvent:
     """A closed Polymarket event from local history DB."""
     event_id: str

@@ -212,6 +212,26 @@ async def init_db():
             "CREATE INDEX IF NOT EXISTS idx_triggers_wallet ON triggers(wallet_address, status)"
         )
 
+        # === Points Snapshot (for $CRAB airdrop) ===
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS points_snapshot (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                wallet_address TEXT NOT NULL,
+                deposit_points INTEGER NOT NULL,
+                usage_points INTEGER NOT NULL,
+                bonus_points INTEGER NOT NULL DEFAULT 0,
+                total_points INTEGER NOT NULL,
+                snapshot_at REAL NOT NULL,
+                snapshot_name TEXT NOT NULL
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_points_snapshot_name ON points_snapshot(snapshot_name)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_points_snapshot_wallet ON points_snapshot(wallet_address, snapshot_name)"
+        )
+
         # === Indexes added by audit ===
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_usage_log_wallet ON usage_log(wallet_address)"
