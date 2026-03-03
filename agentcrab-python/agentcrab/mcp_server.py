@@ -50,7 +50,7 @@ def _error(e: Exception, tool_name: str = "") -> str:
     return json.dumps({"error": "INTERNAL_ERROR", "message": str(e)})
 
 
-def create_server():
+def create_server(host: str = "0.0.0.0", port: int = 8000):
     """Create and return a configured FastMCP server instance."""
     try:
         from mcp.server.fastmcp import FastMCP
@@ -66,6 +66,8 @@ def create_server():
 
     mcp = FastMCP(
         "agentcrab",
+        host=host,
+        port=port,
         instructions=(
             "agentCrab gives you full access to Polymarket prediction markets. "
             "You can search markets, check prices, buy/sell shares, manage positions, "
@@ -954,12 +956,9 @@ def main():
         stream=sys.stderr,
     )
 
-    server = create_server()
+    server = create_server(host=args.host, port=args.port)
     log.info("starting transport=%s", args.transport)
-    if args.transport == "streamable-http":
-        server.run(transport="streamable-http", host=args.host, port=args.port)
-    else:
-        server.run(transport="stdio")
+    server.run(transport=args.transport)
 
 
 if __name__ == "__main__":
