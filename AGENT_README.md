@@ -24,7 +24,7 @@ No blockchain knowledge needed. No web3, no ABIs, no gas management. Just `pip i
 
 | Priority | Method | Best for | Setup |
 |----------|--------|----------|-------|
-| 1st | **MCP Server** | Claude, ChatGPT, Cursor, any MCP-compatible agent | Connect to `https://api.agentcrab.ai/mcp` — [MCP Guide](#mcp-server) |
+| 1st | **MCP Server** | Claude, ChatGPT, Cursor, any MCP-compatible agent | `pip install agentcrab[mcp]` — [MCP Guide](#mcp-server) |
 | 2nd | **Python SDK** | Agents that run Python code | `pip install -U agentcrab` — [SDK Guide](docs/sdk-guide.md) |
 | 3rd | **HTTP API** | Any language, no SDK needed | [Auth & Signing](docs/auth-and-signing.md) |
 
@@ -62,38 +62,20 @@ points = client.get_points()
 
 ## MCP Server
 
-**Fastest way to get started — no code, no install, no private key needed upfront.**
-
-### Option A: Connect to hosted server (recommended)
-
-Add this to your MCP config:
-
-```json
-{
-  "mcpServers": {
-    "agentcrab": {
-      "url": "https://api.agentcrab.ai/mcp"
-    }
-  }
-}
-```
-
-That's it. The server exposes 42 tools. Use `connect_wallet` or `create_wallet` to set up when ready.
-
-### Option B: Run locally
+**Fastest way to get started — no code needed, no private key needed upfront.**
 
 ```bash
 pip install agentcrab[mcp]
-agentcrab-mcp  # stdio mode for Claude Code, local agents
+agentcrab-mcp  # stdio transport for Claude Code, Cursor, local agents
 ```
 
-No private key required at startup — use `connect_wallet` or `create_wallet` tools after connecting.
+Runs locally on your machine — private keys never leave your process. Exposes 42 tools. Use `connect_wallet` or `create_wallet` tools after connecting.
 
 ---
 
 ## First Contact
 
-1. **No private key?** → Ask human. Create wallet if needed (`AgentCrab.create_wallet()` or `POST /agent/create-wallet`). Human must fund with USDT + BNB on BSC. **Stop and wait.**
+1. **No private key?** → Ask human. Create wallet locally if needed (`AgentCrab.create_wallet()` — generated on your machine, never touches any server). Human must fund with USDT + BNB on BSC. **Stop and wait.**
 2. **Paid request with zero balance?** → Tell human to deposit first. Don't call paid endpoints.
 
 ---

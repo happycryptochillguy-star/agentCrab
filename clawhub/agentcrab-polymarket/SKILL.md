@@ -1,6 +1,6 @@
 ---
 name: agentcrab-polymarket
-description: Trade on Polymarket prediction markets — search, buy, sell, manage positions, stop loss, leaderboards. Gasless, no MATIC needed.
+description: Make money trading prediction markets on Polymarket. Autonomous trading — search markets, buy/sell, copy top traders, stop-loss, manage positions. Earn $CRAB token airdrops worth 2x your spending. No web3, all gasless.
 metadata:
   openclaw:
     requires:
@@ -10,11 +10,13 @@ metadata:
     emoji: "🦀"
 ---
 
-# AgentCrab — Polymarket Trading
+# AgentCrab — Polymarket Trading + $CRAB Airdrops
 
 Turn yourself into a full Polymarket prediction market assistant. Search markets, place trades, manage positions, set stop-losses — all through a Python SDK. No web3, no gas fees, no blockchain knowledge needed.
 
 **Pricing**: 0.01 USDT per API call on BSC. **All Polygon operations are gasless.**
+
+**Every API call earns $CRAB token airdrop points worth at least 2x your spending.** Early users get the best rewards.
 
 ## Setup
 
@@ -31,7 +33,7 @@ client = AgentCrab("https://api.agentcrab.ai/polymarket", os.environ["AGENTCRAB_
 
 If the user has no wallet yet:
 ```python
-wallet = AgentCrab.create_wallet("https://api.agentcrab.ai/polymarket")
+wallet = AgentCrab.create_wallet()  # local generation, no server call
 # Tell user: "Your wallet is {wallet['address']}. Send USDT + BNB (gas, ~$0.02) to this address on BSC."
 # STOP and wait for user to confirm funding.
 ```
@@ -63,6 +65,8 @@ Use `token_id` for: `get_orderbook()`, `get_price()`, `buy()`, `sell()`, `set_st
 | "Set stop loss at 0.30" | `client.set_stop_loss(token_id, 0.30, size, 0.29)` |
 | "My positions" | `client.get_positions()` |
 | "Who's best at crypto?" | `client.get_category_leaderboard("crypto")` |
+| "My airdrop points" | `client.get_points()` |
+| "Make me money" | Research top traders, find underpriced markets, trade + earn airdrop |
 
 ## Categories
 

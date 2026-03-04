@@ -48,7 +48,8 @@ class AgentCrab:
         self._private_key = private_key
         self._account = Account.from_key(private_key)
         self.address: str = self._account.address
-        self._l2_creds: dict | None = None
+        self._l2_creds: dict | None = None  # real creds or _SERVER_MANAGED sentinel
+        self._setup_done: bool = False
         self._http = HttpTransport(
             base_url=api_url,
             private_key=private_key,
@@ -61,8 +62,10 @@ class AgentCrab:
         return f"AgentCrab(address={self.address!r}, api_url={self._http._base_url!r})"
 
     def close(self) -> None:
-        """Close the underlying HTTP client."""
+        """Close the underlying HTTP client and clear sensitive data from memory."""
         self._http.close()
+        self._private_key = ""
+        self._account = None
 
     def __enter__(self) -> AgentCrab:
         return self
@@ -75,36 +78,18 @@ class AgentCrab:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def create_wallet(api_url: str) -> dict:
-        """Create a new wallet via the server (no private key needed).
+    def create_wallet(api_url: str = "") -> dict:
+        """Create a new wallet locally (never touches any server).
 
         Returns ``{"address": "0x...", "private_key": "0x..."}``.
-        """
-        import httpx
 
-        try:
-            resp = httpx.post(f"{api_url.rstrip('/')}/agent/create-wallet", timeout=30)
-        except httpx.HTTPError as e:
-            raise NetworkError(message=str(e)) from e
-        if resp.status_code >= 400:
-            try:
-                data = resp.json()
-                detail = data.get("detail", data)
-                if isinstance(detail, dict):
-                    raise AgentCrabError(
-                        error_code=detail.get("error_code", "CREATE_WALLET_FAILED"),
-                        message=detail.get("message", resp.text),
-                    )
-            except (ValueError, KeyError):
-                pass
-            raise AgentCrabError(
-                error_code="CREATE_WALLET_FAILED",
-                message=f"HTTP {resp.status_code}: {resp.text[:200]}",
-            )
-        try:
-            return _extract_data(resp.json())
-        except ValueError as e:
-            raise NetworkError(message=f"Invalid JSON response: {e}") from e
+        The *api_url* parameter is accepted for backward compatibility but ignored.
+        """
+        acct = Account.create()
+        return {
+            "address": acct.address,
+            "private_key": f"0x{acct.key.hex()}",
+        }
 
     # ------------------------------------------------------------------
     # Balance & Payment
@@ -605,6 +590,7 @@ class AgentCrab:
             "secret": secret,
             "passphrase": passphrase,
         }
+        self._setup_done = True
 
     def setup_trading(self) -> SetupResult:
         """One-call trading setup: Safe deploy + approvals + L2 credentials.
@@ -620,13 +606,14 @@ class AgentCrab:
         cached = self._fetch_cached_credentials()
         if cached:
             self._l2_creds = cached
+            self._setup_done = True
             return SetupResult(
-                safe_address="",  # already deployed, address not needed
-                api_key=cached["api_key"],
-                secret=cached["secret"],
-                passphrase=cached["passphrase"],
+                safe_address="",
+                api_key=cached.get("api_key", "(server-managed)"),
+                secret=cached.get("secret", "(server-managed)"),
+                passphrase=cached.get("passphrase", "(server-managed)"),
                 steps_completed=["credentials_cached"],
-                raw=cached,
+                raw={},
             )
 
         # Step 1: Deploy Safe (if needed)
@@ -674,25 +661,30 @@ class AgentCrab:
             paid=True,
         )
         creds_data = _extract_data(creds_resp)
-        api_key = creds_data["api_key"]
-        secret = creds_data["secret"]
-        passphrase = creds_data["passphrase"]
         steps.append("credentials_derived")
 
-        # Store for future trading calls
-        self._l2_creds = {
-            "api_key": api_key,
-            "secret": secret,
-            "passphrase": passphrase,
-        }
+        # New server returns credentials_cached=True (no creds in response).
+        # Old server returns full api_key/secret/passphrase.
+        if creds_data.get("api_key"):
+            # Old server — store real creds locally
+            self._l2_creds = {
+                "api_key": creds_data["api_key"],
+                "secret": creds_data["secret"],
+                "passphrase": creds_data["passphrase"],
+            }
+        else:
+            # New server — creds managed server-side
+            self._l2_creds = {"_server_managed": True}
+
+        self._setup_done = True
 
         return SetupResult(
             safe_address=safe_address,
-            api_key=api_key,
-            secret=secret,
-            passphrase=passphrase,
+            api_key=self._l2_creds.get("api_key", "(server-managed)"),
+            secret=self._l2_creds.get("secret", "(server-managed)"),
+            passphrase=self._l2_creds.get("passphrase", "(server-managed)"),
             steps_completed=steps,
-            raw={"api_key": api_key, "secret": secret, "passphrase": passphrase},
+            raw={},
         )
 
     # ------------------------------------------------------------------
@@ -701,6 +693,11 @@ class AgentCrab:
 
     def _fetch_cached_credentials(self) -> dict | None:
         """Try to fetch cached L2 credentials from the server (free).
+
+        Returns a real creds dict if the server returns full credentials
+        (old server), or a sentinel ``{"_server_managed": True}`` if the
+        server confirms credentials exist but only returns masked values
+        (new server, more secure).
 
         Lets ``NetworkError`` propagate (connectivity issue the caller should
         know about).  Other API errors (404 not cached, 401 auth, etc.) are
@@ -711,20 +708,30 @@ class AgentCrab:
         try:
             resp = self._http.get("/trading/credentials")
             data = _extract_data(resp)
-            if data and data.get("api_key"):
+            if not data:
+                return None
+            # New server: returns has_credentials + masked values
+            if data.get("has_credentials"):
+                return {"_server_managed": True}
+            # Old server: returns full credentials
+            if data.get("api_key"):
                 return data
         except (APIError, AuthError, PaymentError, KeyError, ValueError):
             pass
         return None
 
-    def _require_l2(self) -> dict:
-        if not self._l2_creds:
-            # Try server cache before raising
+    def _require_l2(self) -> dict | None:
+        """Ensure L2 setup is complete. Returns creds dict for headers, or None if server-managed."""
+        if not self._l2_creds and not self._setup_done:
             cached = self._fetch_cached_credentials()
             if cached:
                 self._l2_creds = cached
+                self._setup_done = True
             else:
                 raise SetupRequired()
+        # Server-managed: creds exist on server, no need to pass headers
+        if self._l2_creds and self._l2_creds.get("_server_managed"):
+            return None
         return self._l2_creds
 
     def refresh_balance(self) -> dict:

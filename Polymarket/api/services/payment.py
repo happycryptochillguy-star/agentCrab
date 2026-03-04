@@ -22,12 +22,10 @@ _ETH_ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 logger = logging.getLogger("agentcrab.payment")
 
 # === Signature Replay Prevention ===
-# Track used signatures to prevent replay within the 5-minute validity window.
-# Bounded dict: signature_hex -> expiry_timestamp. Cleaned up periodically.
-_used_signatures: dict[str, float] = {}
-_SIG_CLEANUP_INTERVAL = 60  # seconds
+# Persisted in SQLite (balance.py used_signatures table).
+# Survives restarts and works across multiple workers.
+_SIG_CLEANUP_INTERVAL = 300  # seconds
 _sig_last_cleanup = 0.0
-_MAX_USED_SIGNATURES = 10000  # emergency cap to prevent OOM
 
 # ABI fragments we need
 PAYMENT_ABI = json.loads("""[
@@ -113,10 +111,11 @@ def is_valid_address(address: str) -> bool:
     return bool(_ETH_ADDRESS_RE.match(address))
 
 
-def verify_signature(wallet_address: str, message: str, signature: str) -> bool:
+async def verify_signature(wallet_address: str, message: str, signature: str) -> bool:
     """Verify EIP-191 personal_sign. Message format: 'agentcrab:{unix_timestamp}'.
 
     Includes replay prevention: each signature can only be used once.
+    Replay state persisted in SQLite (survives restarts, works across workers).
     """
     global _sig_last_cleanup
     try:
@@ -132,12 +131,6 @@ def verify_signature(wallet_address: str, message: str, signature: str) -> bool:
         if abs(now - ts) > settings.signature_max_age_seconds:
             return False
 
-        # Replay check: reject if this exact signature was already used
-        sig_lower = signature.lower()
-        if sig_lower in _used_signatures:
-            logger.warning("Rejected replayed signature from %s", wallet_address[:10])
-            return False
-
         # Recover signer (CPU-only, no RPC)
         w3 = get_w3()
         msg = encode_defunct(text=message)
@@ -145,20 +138,19 @@ def verify_signature(wallet_address: str, message: str, signature: str) -> bool:
         if recovered.lower() != wallet_address.lower():
             return False
 
-        # Mark signature as used (expires when timestamp goes stale)
-        _used_signatures[sig_lower] = ts + settings.signature_max_age_seconds
+        # Replay check: atomically claim this signature in SQLite.
+        # TOCTOU-safe (single INSERT with UNIQUE constraint).
+        # Persists across restarts. Works across multiple workers.
+        expires_at = ts + settings.signature_max_age_seconds
+        claimed = await balance_svc.try_claim_signature(signature, expires_at)
+        if not claimed:
+            logger.warning("Rejected replayed signature from %s", wallet_address[:10])
+            return False
 
         # Periodic cleanup of expired signatures
         if now - _sig_last_cleanup > _SIG_CLEANUP_INTERVAL:
             _sig_last_cleanup = now
-            expired = [k for k, exp in _used_signatures.items() if now > exp]
-            for k in expired:
-                del _used_signatures[k]
-            # Emergency cap: if still too large after cleanup, drop oldest half
-            if len(_used_signatures) > _MAX_USED_SIGNATURES:
-                sorted_keys = sorted(_used_signatures, key=_used_signatures.get)
-                for k in sorted_keys[:len(_used_signatures) // 2]:
-                    del _used_signatures[k]
+            await balance_svc.cleanup_expired_signatures()
 
         return True
     except Exception as e:

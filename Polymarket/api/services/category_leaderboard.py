@@ -176,6 +176,9 @@ async def sync_category_leaderboard(top_n: int = 200) -> dict:
     """Sync category leaderboard: fetch top traders, their positions, resolve categories, aggregate."""
     global _last_sync_time
 
+    # Cap to prevent request amplification (each trader = 1 upstream call)
+    top_n = min(top_n, 500)
+
     logger.info(f"Starting category leaderboard sync (top_n={top_n})...")
     t0 = time.time()
 
@@ -380,7 +383,9 @@ async def get_category_leaderboard(
         "positions": "total_positions DESC",
         "win_rate": "win_rate DESC",
     }
-    order = sort_col_map.get(sort_by, "total_pnl DESC")
+    if sort_by not in sort_col_map:
+        sort_by = "pnl"
+    order = sort_col_map[sort_by]
 
     db = await get_db()
 

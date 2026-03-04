@@ -35,7 +35,6 @@ Timestamp must be within 5 minutes of server time.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/agent/create-wallet` | Create new wallet (no auth needed) |
 | GET | `/agent/capabilities` | Full API discovery |
 | GET | `/payment/balance` | Check balance |
 | GET | `/markets/categories` | List categories |

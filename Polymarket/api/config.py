@@ -84,8 +84,9 @@ settings = Settings()
 
 
 def reload_settings() -> dict[str, tuple]:
-    """Re-read .env and update the global settings object in-place.
+    """Re-read .env and update the global settings object atomically.
 
+    Collects all changes first, then applies them in a single pass.
     Returns {field_name: (old_value, new_value)} for fields that changed.
     """
     new = Settings()
@@ -95,5 +96,7 @@ def reload_settings() -> dict[str, tuple]:
         new_val = getattr(new, field_name)
         if old_val != new_val:
             changes[field_name] = (old_val, new_val)
-            object.__setattr__(settings, field_name, new_val)
+    # Apply all changes in a single pass (minimizes inconsistency window)
+    for field_name, (_, new_val) in changes.items():
+        object.__setattr__(settings, field_name, new_val)
     return changes

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import stat
 import time
@@ -6,6 +7,8 @@ import time
 import aiosqlite
 
 from api.config import settings
+
+logger = logging.getLogger("agentcrab.balance")
 
 DB_PATH = settings.db_path
 
@@ -232,6 +235,17 @@ async def init_db():
             "CREATE INDEX IF NOT EXISTS idx_points_snapshot_wallet ON points_snapshot(wallet_address, snapshot_name)"
         )
 
+        # === Used Signatures (replay prevention, persisted across restarts) ===
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS used_signatures (
+                signature TEXT PRIMARY KEY,
+                expires_at REAL NOT NULL
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_used_sig_expires ON used_signatures(expires_at)"
+        )
+
         # === Indexes added by audit ===
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_usage_log_wallet ON usage_log(wallet_address)"
@@ -358,6 +372,40 @@ async def get_remaining(wallet_address: str) -> tuple[int, int, int]:
         return (0, 0, 0)
     deposited, consumed = row[0]
     return (deposited, consumed, deposited - consumed)
+
+
+# === Signature Replay Prevention (persisted in SQLite) ===
+
+
+async def try_claim_signature(signature: str, expires_at: float) -> bool:
+    """Atomically claim a signature. Returns True if first use, False if replay.
+
+    TOCTOU-safe: uses INSERT with UNIQUE constraint (single atomic operation).
+    Persists across restarts. Works across multiple workers.
+    """
+    db = await get_db()
+    async with _write_lock:
+        try:
+            await db.execute(
+                "INSERT INTO used_signatures (signature, expires_at) VALUES (?, ?)",
+                (signature.lower(), expires_at),
+            )
+            await db.commit()
+            return True
+        except Exception:
+            # UNIQUE constraint violation → already used
+            return False
+
+
+async def cleanup_expired_signatures():
+    """Remove expired signatures from the database."""
+    db = await get_db()
+    async with _write_lock:
+        await db.execute(
+            "DELETE FROM used_signatures WHERE expires_at < ?",
+            (time.time(),),
+        )
+        await db.commit()
 
 
 def calls_remaining(remaining_wei: int) -> int:

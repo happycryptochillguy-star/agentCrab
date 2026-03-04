@@ -477,11 +477,9 @@ async def submit_credentials(
         logger.warning("balance-allowance/update failed for %s (non-fatal)", wallet_address)
 
     return SuccessResponse(
-        summary="Polymarket L2 credentials derived and cached. Use as X-Poly-* headers for trading, or retrieve later via GET /trading/credentials.",
+        summary="Polymarket L2 credentials derived and cached server-side. Use GET /trading/credentials to verify, or pass X-Poly-* headers for trading.",
         data={
-            "api_key": api_key,
-            "secret": secret,
-            "passphrase": passphrase,
+            "credentials_cached": True,
             "balance_allowance_updated": balance_update is not None,
         },
     )
@@ -506,53 +504,78 @@ async def get_credentials(
             ).model_dump(),
         )
 
+    # Return masked credentials — enough for agents to confirm existence,
+    # but never expose full secrets over the wire.
+    def _mask(v: str) -> str:
+        if len(v) <= 4:
+            return "****"
+        return "*" * (len(v) - 4) + v[-4:]
+
     return SuccessResponse(
-        summary="Cached L2 credentials retrieved. Use as X-Poly-* headers for trading.",
-        data=creds,
+        summary="L2 credentials are cached server-side. They are injected automatically for trading endpoints that need them.",
+        data={
+            "has_credentials": True,
+            "api_key_masked": _mask(creds["api_key"]),
+            "secret_masked": _mask(creds["secret"]),
+            "passphrase_masked": _mask(creds["passphrase"]),
+        },
     )
 
 
 # === Order Placement (prepare-submit pattern) ===
 
 
-def _get_poly_creds_no_address(
-    x_poly_api_key: str = Header(..., alias="X-Poly-Api-Key"),
-    x_poly_secret: str = Header(..., alias="X-Poly-Secret"),
-    x_poly_passphrase: str = Header(..., alias="X-Poly-Passphrase"),
+async def _get_poly_creds(
+    x_wallet_address: str = Header(..., alias="X-Wallet-Address"),
+    x_poly_api_key: str | None = Header(None, alias="X-Poly-Api-Key"),
+    x_poly_secret: str | None = Header(None, alias="X-Poly-Secret"),
+    x_poly_passphrase: str | None = Header(None, alias="X-Poly-Passphrase"),
 ) -> dict:
-    """Extract Polymarket L2 credentials from headers (address derived server-side)."""
-    # Validate non-empty
-    if not x_poly_api_key or not x_poly_secret or not x_poly_passphrase:
+    """Get L2 credentials: from headers if provided, otherwise auto-load from DB.
+
+    This allows agents to trade without ever seeing or storing L2 credentials —
+    they are derived once via submit-credentials and stored server-side.
+    """
+    has_headers = x_poly_api_key and x_poly_secret and x_poly_passphrase
+    if has_headers:
+        # Validate base64 format for secret
+        import base64
+        try:
+            base64.urlsafe_b64decode(x_poly_secret)
+        except Exception:
+            raise HTTPException(
+                status_code=400,
+                detail=ErrorResponse(
+                    error_code="INVALID_CREDENTIALS",
+                    message="X-Poly-Secret is not valid base64. Check your L2 credentials.",
+                ).model_dump(),
+            )
+        return {
+            "api_key": x_poly_api_key,
+            "secret": x_poly_secret,
+            "passphrase": x_poly_passphrase,
+        }
+
+    # Auto-load from DB
+    creds = await balance_svc.get_l2_credentials(x_wallet_address)
+    if not creds or not creds.get("api_key"):
         raise HTTPException(
             status_code=400,
             detail=ErrorResponse(
-                error_code="INVALID_CREDENTIALS",
-                message="X-Poly-Api-Key, X-Poly-Secret, and X-Poly-Passphrase headers must all be non-empty.",
+                error_code="NO_CREDENTIALS",
+                message=(
+                    "No L2 credentials found. Complete the trading setup first: "
+                    "POST /trading/prepare-enable → sign → POST /trading/submit-credentials"
+                ),
             ).model_dump(),
         )
-    # Validate base64 format for secret
-    import base64
-    try:
-        base64.urlsafe_b64decode(x_poly_secret)
-    except Exception:
-        raise HTTPException(
-            status_code=400,
-            detail=ErrorResponse(
-                error_code="INVALID_CREDENTIALS",
-                message="X-Poly-Secret is not valid base64. Check your L2 credentials.",
-            ).model_dump(),
-        )
-    return {
-        "api_key": x_poly_api_key,
-        "secret": x_poly_secret,
-        "passphrase": x_poly_passphrase,
-    }
+    return creds
 
 
 @router.post("/refresh-balance")
 async def refresh_balance(
     wallet_address: str = Depends(verify_auth_only),
-    creds: dict = Depends(_get_poly_creds_no_address),
+    creds: dict = Depends(_get_poly_creds),
 ):
     """Tell the Polymarket CLOB to refresh its cached balance/allowances.
 
@@ -661,7 +684,7 @@ async def prepare_order(
 async def submit_order(
     req: SubmitOrderRequest,
     wallet_address: str = Depends(verify_auth_and_payment),
-    creds: dict = Depends(_get_poly_creds_no_address),
+    creds: dict = Depends(_get_poly_creds),
 ):
     """Submit a signed order to Polymarket CLOB.
 
@@ -843,7 +866,7 @@ async def submit_batch_order(
     req: SubmitBatchOrderRequest,
     request: Request,
     wallet_address: str = Depends(verify_auth_only),
-    creds: dict = Depends(_get_poly_creds_no_address),
+    creds: dict = Depends(_get_poly_creds),
 ):
     """Submit multiple signed orders to Polymarket CLOB.
 
@@ -972,7 +995,7 @@ async def submit_batch_order(
 async def cancel_order(
     order_id: str,
     wallet_address: str = Depends(verify_auth_and_payment),
-    creds: dict = Depends(_get_poly_creds_no_address),
+    creds: dict = Depends(_get_poly_creds),
 ):
     """Cancel a single order."""
     try:
@@ -1000,7 +1023,7 @@ async def cancel_order(
 @router.delete("/orders")
 async def cancel_orders(
     wallet_address: str = Depends(verify_auth_and_payment),
-    creds: dict = Depends(_get_poly_creds_no_address),
+    creds: dict = Depends(_get_poly_creds),
 ):
     """Cancel all open orders."""
     try:
@@ -1028,7 +1051,7 @@ async def cancel_orders(
 async def get_open_orders(
     market: str | None = Query(None, description="Filter by market condition ID"),
     wallet_address: str = Depends(verify_auth_and_payment),
-    creds: dict = Depends(_get_poly_creds_no_address),
+    creds: dict = Depends(_get_poly_creds),
 ):
     """Get your open orders on Polymarket."""
     try:

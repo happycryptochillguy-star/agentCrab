@@ -9,6 +9,7 @@ logger = logging.getLogger("agentcrab")
 from api.auth import verify_auth_and_payment
 from api.models import SuccessResponse, ErrorResponse
 from api.services import leaderboard as lb_svc
+from api.services.payment import is_valid_address
 
 router = APIRouter(prefix="/traders", tags=["traders"])
 
@@ -93,6 +94,10 @@ async def get_trader_positions(
     wallet_address: str = Depends(verify_auth_and_payment),
 ):
     """Get positions for any trader by wallet address."""
+    if not is_valid_address(address):
+        raise HTTPException(status_code=400, detail=ErrorResponse(
+            error_code="INVALID_ADDRESS", message="Invalid Ethereum address format.",
+        ).model_dump())
     try:
         positions = await lb_svc.get_trader_positions(address)
     except Exception as e:
@@ -125,6 +130,10 @@ async def get_trader_trades(
     wallet_address: str = Depends(verify_auth_and_payment),
 ):
     """Get trade history for any trader."""
+    if not is_valid_address(address):
+        raise HTTPException(status_code=400, detail=ErrorResponse(
+            error_code="INVALID_ADDRESS", message="Invalid Ethereum address format.",
+        ).model_dump())
     try:
         trades = await lb_svc.get_trader_trades(address, limit=limit, offset=offset)
     except Exception as e:

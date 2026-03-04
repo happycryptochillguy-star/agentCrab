@@ -42,17 +42,15 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 #
 # Tier 0 (open):   /health, /agent/capabilities, /markets/categories, /markets/tags,
 #                  /trading/setup, /trading/contracts, /deposit/supported-assets
-# Tier 1 (free):  /agent/create-wallet  (CPU-heavy key generation)
-# Tier 2 (auth):  /payment/*, /trading/prepare-*  (free but authenticated)
-# Tier 3 (paid):  everything else  (costs 0.01 USDT, economic protection)
-# Tier 4 (admin): /admin/*
+# Tier 1 (auth):  /payment/*, /trading/prepare-*  (free but authenticated)
+# Tier 2 (paid):  everything else  (costs 0.01 USDT, economic protection)
+# Tier 3 (admin): /admin/*
 
 RATE_WINDOW = 60  # seconds
 
 # Per-IP limits by tier (requests per RATE_WINDOW)
 _TIER_LIMITS = {
     "open": 30,       # public info endpoints
-    "keygen": 3,      # create-wallet (CPU heavy)
     "auth": 60,       # free authenticated endpoints
     "paid": 120,      # paid endpoints (economic cost already limits abuse)
     "admin": 10,      # admin endpoints
@@ -61,7 +59,6 @@ _TIER_LIMITS = {
 # Path prefix → tier mapping (checked in order, first match wins)
 _TIER_RULES: list[tuple[str, str]] = [
     ("/admin/", "admin"),
-    ("/polymarket/agent/create-wallet", "keygen"),
     ("/polymarket/agent/", "open"),
     ("/polymarket/markets/categories", "open"),
     ("/polymarket/markets/tags", "open"),
@@ -150,11 +147,11 @@ async def lifespan(app: FastAPI):
 
     if not settings.l2_encryption_key:
         logger.critical(
-            "L2_ENCRYPTION_KEY is not set! L2 credentials will be stored in PLAINTEXT. "
-            "This is a CRITICAL security risk in production. "
+            "L2_ENCRYPTION_KEY is not set! Refusing to start. "
             "Generate a key with: python3 -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\" "
             "and set L2_ENCRYPTION_KEY in .env."
         )
+        raise SystemExit("FATAL: L2_ENCRYPTION_KEY is required. Cannot start without it.")
 
     # Start periodic sync loops
     history_task = asyncio.create_task(_history_sync_loop())

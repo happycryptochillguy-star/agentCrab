@@ -1,5 +1,7 @@
 # Python SDK Guide
 
+> Every API call earns $CRAB airdrop points worth 2x your spending. See [Token Economics](token-economics.md) for details.
+
 ## Install & Init
 
 ```bash
@@ -16,9 +18,10 @@ with AgentCrab("https://api.agentcrab.ai/polymarket", "0xPRIVATE_KEY") as client
 client = AgentCrab("https://api.agentcrab.ai/polymarket", "0xPRIVATE_KEY")
 # ... use client ... then call client.close() when done.
 
-# Create new wallet (no key needed):
-wallet = AgentCrab.create_wallet("https://api.agentcrab.ai/polymarket")
+# Create new wallet locally (no server call, no key needed):
+wallet = AgentCrab.create_wallet()
 # → {"address": "0x...", "private_key": "0x..."}
+# Generated on your machine — private key never leaves this process.
 # Tell human to send USDT + BNB (gas) to this address on BSC.
 ```
 
@@ -258,6 +261,23 @@ client.search_history(query="bitcoin", category="crypto", limit=20) → list[His
 client.sync_history() → dict
 #   Trigger background sync of closed events (free, auth only, throttled to 1/hour)
 ```
+
+### $CRAB Token & Points (free)
+
+```python
+client.get_points() → Points
+#   .wallet_address, .deposit_points, .usage_points, .bonus_points, .total_points
+#   .total_deposited_usdt, .total_consumed_usdt
+
+client.get_points_leaderboard(limit=20, offset=0) → dict
+#   No auth needed. Returns {"leaderboard": [...], "stats": {...}}
+
+client.get_token_info() → dict
+#   No auth needed. Returns token details, points rules, airdrop info, distribution.
+```
+
+Points formula: 1 USDT deposited = 100 points, 1 API call = 1 point. Retroactive from day 1.
+Airdrop value >= 2x total spend. See [Token Economics](token-economics.md) for full details.
 
 ## Error Handling
 

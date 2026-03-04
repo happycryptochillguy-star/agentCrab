@@ -66,6 +66,8 @@ class HttpTransport:
 
     def close(self) -> None:
         self._client.close()
+        # Clear private key from memory to minimize exposure window
+        self._private_key = ""
 
     def _check_version(self, resp: httpx.Response) -> None:
         """Check X-Min-SDK-Version header and warn if SDK is outdated."""

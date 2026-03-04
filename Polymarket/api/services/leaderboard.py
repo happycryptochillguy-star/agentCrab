@@ -13,12 +13,16 @@ logger = logging.getLogger("agentcrab.leaderboard")
 
 async def get_leaderboard(limit: int = 20, offset: int = 0) -> list[LeaderboardEntry]:
     """Get top traders leaderboard. Paginates automatically if limit > 50."""
+    # Cap limit to prevent unbounded upstream pagination loops
+    limit = min(limit, 500)
     client = get_proxy_client()
     page_size = 50  # Data API max per request
+    max_pages = 20  # Safety bound: max 20 pages (1000 entries)
     all_entries: list[LeaderboardEntry] = []
     current_offset = offset
+    pages_fetched = 0
 
-    while len(all_entries) < limit:
+    while len(all_entries) < limit and pages_fetched < max_pages:
         fetch_limit = min(page_size, limit - len(all_entries))
         resp = await client.get(
             f"{settings.data_api_url}/v1/leaderboard",
@@ -48,6 +52,7 @@ async def get_leaderboard(limit: int = 20, offset: int = 0) -> list[LeaderboardE
                 )
             )
 
+        pages_fetched += 1
         if len(raw) < fetch_limit:
             break  # Last page
         current_offset += len(raw)

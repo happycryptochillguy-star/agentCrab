@@ -2,24 +2,18 @@
 
 ## Create Wallet
 
-```
-POST /agent/create-wallet
-```
+Wallet creation happens **locally** via the SDK — no server call:
 
-No auth needed. Response:
-```json
-{
-  "status": "ok",
-  "summary": "Wallet created: 0xABC.... Fund with USDT + BNB on BSC to start using paid features.",
-  "data": {
-    "address": "0xABC...",
-    "private_key": "0x123..."
-  }
-}
+```python
+from agentcrab import AgentCrab
+
+wallet = AgentCrab.create_wallet()
+# → {"address": "0x...", "private_key": "0x..."}
+# Generated on your machine — private key never leaves this process.
 ```
 
 **After creating, tell the human:**
-> Your wallet address is `0xABC...`. Please send USDT + a small amount of BNB (for gas, ~$0.02 worth) to this address on **BSC (BNB Smart Chain)**. Let me know when done.
+> Your wallet address is `{wallet['address']}`. Please send USDT + a small amount of BNB (for gas, ~$0.02 worth) to this address on **BSC (BNB Smart Chain)**. Let me know when done.
 
 Then **STOP and wait**. Do not proceed until the human confirms funding.
 

@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import re
 import time
 from collections import OrderedDict
 
@@ -13,6 +14,20 @@ from api.models import GammaEvent, GammaMarketDetail, Market, MarketOutcome
 from api.services.http_pool import get_proxy_client
 
 logger = logging.getLogger("agentcrab.gamma")
+
+# Path-segment sanitization: reject any value containing characters that could
+# manipulate upstream URL paths (path traversal, query injection, etc.).
+_SAFE_PATH_RE = re.compile(r"^[a-zA-Z0-9._~:@!$&'()*+,;=-]+$")
+
+
+def _sanitize_path(value: str, label: str = "parameter") -> str:
+    """Validate a user-supplied value is safe for URL path interpolation.
+
+    Rejects values containing '/', '..', '?', '#', or whitespace.
+    """
+    if not value or not _SAFE_PATH_RE.match(value):
+        raise ValueError(f"Invalid {label}: contains forbidden characters")
+    return value
 
 
 # === LRU + TTL cache for search results ===
@@ -294,6 +309,7 @@ async def _fetch_search_results(
 
 async def get_event_by_id(event_id: str) -> GammaEvent | None:
     """Get a specific event by ID."""
+    _sanitize_path(event_id, "event_id")
     client = get_proxy_client()
     resp = await client.get(f"{settings.gamma_api_url}/events/{event_id}")
     if resp.status_code == 404:
@@ -319,6 +335,7 @@ async def get_event_by_id(event_id: str) -> GammaEvent | None:
 
 async def get_event_by_slug(slug: str) -> GammaEvent | None:
     """Get a specific event by slug."""
+    _sanitize_path(slug, "slug")
     client = get_proxy_client()
     resp = await client.get(f"{settings.gamma_api_url}/events/slug/{slug}")
     if resp.status_code == 404:
@@ -344,6 +361,7 @@ async def get_event_by_slug(slug: str) -> GammaEvent | None:
 
 async def get_market_by_id(market_id: str) -> GammaMarketDetail | None:
     """Get a specific market by ID."""
+    _sanitize_path(market_id, "market_id")
     client = get_proxy_client()
     resp = await client.get(f"{settings.gamma_api_url}/markets/{market_id}")
     if resp.status_code == 404:
@@ -531,6 +549,9 @@ async def browse_by_tags(
     """
     if not tag_slugs:
         return []
+
+    # Cap tag count to prevent request amplification (each slug = 1 upstream call)
+    tag_slugs = tag_slugs[:5]
 
     if len(tag_slugs) == 1:
         return await search_events(

@@ -21,36 +21,47 @@ from api.services import triggers as trigger_svc
 router = APIRouter(prefix="/trading/triggers", tags=["triggers"])
 
 
-def _get_poly_creds(
-    x_poly_api_key: str = Header(..., alias="X-Poly-Api-Key"),
-    x_poly_secret: str = Header(..., alias="X-Poly-Secret"),
-    x_poly_passphrase: str = Header(..., alias="X-Poly-Passphrase"),
+async def _get_poly_creds(
+    x_wallet_address: str = Header(..., alias="X-Wallet-Address"),
+    x_poly_api_key: str | None = Header(None, alias="X-Poly-Api-Key"),
+    x_poly_secret: str | None = Header(None, alias="X-Poly-Secret"),
+    x_poly_passphrase: str | None = Header(None, alias="X-Poly-Passphrase"),
 ) -> dict:
-    # Validate non-empty
-    if not x_poly_api_key or not x_poly_secret or not x_poly_passphrase:
+    """Get L2 credentials: from headers if provided, otherwise auto-load from DB."""
+    from api.services import balance as balance_svc
+
+    has_headers = x_poly_api_key and x_poly_secret and x_poly_passphrase
+    if has_headers:
+        try:
+            base64.urlsafe_b64decode(x_poly_secret)
+        except Exception:
+            raise HTTPException(
+                status_code=400,
+                detail=ErrorResponse(
+                    error_code="INVALID_CREDENTIALS",
+                    message="X-Poly-Secret is not valid base64. Check your L2 credentials.",
+                ).model_dump(),
+            )
+        return {
+            "api_key": x_poly_api_key,
+            "secret": x_poly_secret,
+            "passphrase": x_poly_passphrase,
+        }
+
+    # Auto-load from DB
+    creds = await balance_svc.get_l2_credentials(x_wallet_address)
+    if not creds or not creds.get("api_key"):
         raise HTTPException(
             status_code=400,
             detail=ErrorResponse(
-                error_code="INVALID_CREDENTIALS",
-                message="X-Poly-Api-Key, X-Poly-Secret, and X-Poly-Passphrase headers must all be non-empty.",
+                error_code="NO_CREDENTIALS",
+                message=(
+                    "No L2 credentials found. Complete the trading setup first: "
+                    "POST /trading/prepare-enable → sign → POST /trading/submit-credentials"
+                ),
             ).model_dump(),
         )
-    # Validate base64 format for secret
-    try:
-        base64.urlsafe_b64decode(x_poly_secret)
-    except Exception:
-        raise HTTPException(
-            status_code=400,
-            detail=ErrorResponse(
-                error_code="INVALID_CREDENTIALS",
-                message="X-Poly-Secret is not valid base64. Check your L2 credentials.",
-            ).model_dump(),
-        )
-    return {
-        "api_key": x_poly_api_key,
-        "secret": x_poly_secret,
-        "passphrase": x_poly_passphrase,
-    }
+    return creds
 
 
 @router.post("/prepare")

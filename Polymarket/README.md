@@ -6,9 +6,9 @@ Full-stack API middleware for Polymarket prediction markets, designed for AI age
 
 This module provides structured access to all Polymarket functionality through a FastAPI server with on-chain payment verification on BSC (Binance Smart Chain).
 
-**Features**: Market search, deposits (cross-chain relay), orderbooks, positions/P&L, leaderboard, order execution, batch orders, stop-loss/take-profit triggers, category leaderboards, health monitoring.
+**Features**: Market search, deposits (cross-chain relay), orderbooks, positions/P&L, leaderboard, order execution, batch orders, stop-loss/take-profit triggers, category leaderboards, $CRAB token points system, health monitoring.
 
-**For AI agents**: Read [`AGENT_README.md`](../AGENT_README.md) in the repo root — it contains all API endpoints, payment setup, and usage examples.
+**For AI agents**: Read [`AGENT_README.md`](../AGENT_README.md) in the repo root — it contains all API endpoints, payment setup, money-making guides, and $CRAB token airdrop details.
 
 ## Architecture
 
@@ -39,11 +39,13 @@ Polymarket/
 │   │   ├── leaderboard.py     # Global leaderboard
 │   │   ├── category_leaderboard.py  # Category leaderboard sync + query
 │   │   ├── triggers.py        # Stop loss / take profit trigger CRUD + monitor
+│   │   ├── points.py          # $CRAB token points calculation
 │   │   ├── health.py          # Health probes + Telegram alerts
 │   │   ├── history.py         # Historical (closed) events sync
 │   │   └── http_pool.py       # Shared httpx connection pools
 │   └── routes/
-│       ├── agent.py           # /agent/* (capabilities, create-wallet)
+│       ├── agent.py           # /agent/* (capabilities)
+│       ├── token.py           # /token/* (points, leaderboard, token info)
 │       ├── admin.py           # /admin/* (health-status, reload-config)
 │       ├── markets.py         # /markets/* (search, browse, events, categories)
 │       ├── orderbook.py       # /orderbook/*, /prices/*

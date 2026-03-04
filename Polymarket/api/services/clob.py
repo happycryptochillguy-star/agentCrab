@@ -30,19 +30,24 @@ logger = logging.getLogger("agentcrab.clob")
 
 
 def _raise_clob_error(resp: httpx.Response, context: str = "CLOB request"):
-    """Raise HTTPException with CLOB's actual error message instead of generic status."""
+    """Raise HTTPException with CLOB's actual error message instead of generic status.
+
+    Sanitizes upstream error details to avoid leaking internal URLs or headers.
+    """
     if resp.status_code < 400:
         return
     try:
         detail = resp.json()
-        msg = detail if isinstance(detail, str) else detail.get("error", detail.get("message", resp.text[:300]))
+        msg = detail if isinstance(detail, str) else detail.get("error", detail.get("message", ""))
     except Exception:
-        msg = resp.text[:300]
+        msg = ""
+    # Truncate and strip potentially sensitive upstream internals
+    msg = str(msg)[:200]
     raise HTTPException(
         status_code=resp.status_code,
         detail=ErrorResponse(
             error_code="CLOB_ERROR",
-            message=f"{context}: {msg}",
+            message=f"{context}: {msg}" if msg else f"{context} failed (HTTP {resp.status_code})",
         ).model_dump(),
     )
 
@@ -228,8 +233,8 @@ def _build_l2_headers(
         message += body
     try:
         secret_bytes = base64.urlsafe_b64decode(secret)
-    except Exception as e:
-        raise ValueError(f"Invalid L2 secret (not valid base64): {e}") from e
+    except Exception:
+        raise ValueError("Invalid L2 secret (not valid base64)")
     h = hmac.new(
         secret_bytes,
         message.encode("utf-8"),

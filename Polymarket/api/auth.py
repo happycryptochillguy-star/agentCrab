@@ -26,7 +26,7 @@ async def verify_auth_and_payment(
     request.state.paid_amount = 0
 
     # 1. Verify signature
-    if not payment_svc.verify_signature(x_wallet_address, x_message, x_signature):
+    if not await payment_svc.verify_signature(x_wallet_address, x_message, x_signature):
         raise HTTPException(
             status_code=401,
             detail=ErrorResponse(
@@ -107,7 +107,7 @@ async def verify_auth_only(
 
     Returns the wallet address on success.
     """
-    if not payment_svc.verify_signature(x_wallet_address, x_message, x_signature):
+    if not await payment_svc.verify_signature(x_wallet_address, x_message, x_signature):
         raise HTTPException(
             status_code=401,
             detail=ErrorResponse(

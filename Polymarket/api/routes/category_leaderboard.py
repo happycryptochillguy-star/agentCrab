@@ -8,6 +8,7 @@ from api.auth import verify_auth_and_payment, verify_auth_only
 from api.models import SuccessResponse, ErrorResponse
 from api.services import category_leaderboard as cat_lb_svc
 from api.services.categories import resolve_category
+from api.services.payment import is_valid_address
 
 router = APIRouter(prefix="/traders/categories", tags=["category-leaderboard"])
 
@@ -79,6 +80,11 @@ async def get_trader_category_profile(
     Without category: returns all categories this trader has positions in.
     With category: returns that category's stats + individual positions.
     """
+    if not is_valid_address(address):
+        raise HTTPException(status_code=400, detail=ErrorResponse(
+            error_code="INVALID_ADDRESS", message="Invalid Ethereum address format.",
+        ).model_dump())
+
     if category:
         node = resolve_category(category)
         if node is None:

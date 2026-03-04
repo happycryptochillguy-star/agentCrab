@@ -1,27 +1,8 @@
-from eth_account import Account
 from fastapi import APIRouter
 
 from api.config import settings
-from api.models import SuccessResponse
 
 router = APIRouter(prefix="/agent", tags=["agent"])
-
-
-@router.post("/create-wallet")
-async def create_wallet():
-    """Create a new wallet (EOA). Free, no auth required.
-
-    Returns address + private key. Works on both BSC (payment) and Polygon (trading).
-    The agent should save the private key and tell the human to fund the address with USDT + BNB on BSC.
-    """
-    acct = Account.create()
-    return SuccessResponse(
-        summary=f"Wallet created: {acct.address}. Fund with USDT + BNB on BSC to start using paid features.",
-        data={
-            "address": acct.address,
-            "private_key": f"0x{acct.key.hex()}",
-        },
-    )
 
 
 @router.get("/capabilities")
@@ -63,11 +44,6 @@ async def get_capabilities():
                         "path": "/health (NOTE: root level, not under /polymarket)",
                         "method": "GET",
                         "description": "Check if the API is running.",
-                    },
-                    {
-                        "path": "/agent/create-wallet",
-                        "method": "POST",
-                        "description": "Create a new wallet. Returns address + private key. No auth needed.",
                     },
                     {
                         "path": "/agent/capabilities",
@@ -520,7 +496,7 @@ async def get_capabilities():
                     "open_endpoints": "30 req/min (unauthenticated: /health, /agent/*, /markets/categories, /markets/tags)",
                     "auth_endpoints": "60 req/min (free authenticated: /payment/*, /deposit/*, /trading/prepare-*)",
                     "paid_endpoints": "120 req/min (paid: /markets/search, /orderbook/*, /positions/*, etc.)",
-                    "keygen_endpoints": "3 req/min (/trading/submit-deploy-safe, submit-approvals, submit-credentials)",
+                    "setup_endpoints": "3 req/min (/trading/submit-deploy-safe, submit-approvals, submit-credentials)",
                 },
             },
             "workflows": {

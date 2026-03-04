@@ -1,11 +1,12 @@
 # agentcrab
 
-Python SDK for [agentCrab](https://agentcrab.ai) — turn any AI agent into a Polymarket assistant with 3 lines of code.
+Python SDK + MCP Server for [agentCrab](https://agentcrab.ai) — turn any AI agent into a Polymarket assistant with 3 lines of code. Every API call earns [$CRAB airdrop](https://agentcrab.ai) points worth 2x your spending.
 
 ## Install
 
 ```bash
-pip install agentcrab
+pip install agentcrab          # SDK only
+pip install agentcrab[mcp]     # SDK + MCP server
 ```
 
 ## Quick Start
@@ -117,11 +118,32 @@ for pos in client.get_positions():
 | `cancel_trigger(trigger_id)` | Cancel trigger | Free |
 | `cancel_all_triggers(token_id)` | Cancel all triggers | Free |
 
+### $CRAB Token & Points
+
+| Method | Description | Cost |
+|--------|-------------|------|
+| `get_points()` | Your airdrop points | Free |
+| `get_points_leaderboard(limit)` | Points ranking | Free |
+| `get_token_info()` | Token details + rules | Free |
+
+Every API call earns points. 1 USDT deposited = 100 points, 1 API call = 1 point. Airdrop value >= 2x total spend.
+
 ### Wallet
 
 | Method | Description |
 |--------|-------------|
-| `AgentCrab.create_wallet(api_url)` | Create new wallet (static) |
+| `AgentCrab.create_wallet()` | Create new wallet locally (static, no server call) |
+
+## MCP Server
+
+For Claude Code, Cursor, Windsurf, and other MCP-compatible tools:
+
+```bash
+# stdio mode (Claude Code, local agents)
+AGENTCRAB_PRIVATE_KEY=0x... agentcrab-mcp
+```
+
+Runs locally — private keys never leave your machine. Exposes all SDK methods as MCP tools. No code needed — the AI calls tools directly.
 
 ## Typed Responses
 

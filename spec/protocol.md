@@ -95,13 +95,14 @@ self-discover the full API surface from a single URL.
 
 ### 5.2 Wallet Creation
 
-For agents without an existing wallet:
+Wallet creation is a **client-side operation** — no server endpoint involved:
 
-```
-POST /agent/create-wallet
+```python
+wallet = AgentCrab.create_wallet()  # local, offline
 ```
 
-Returns a new EOA address and private key. The agent stores the key locally.
+Returns a new EOA address and private key generated locally. The key never
+leaves the agent's process.
 
 ## 6. Response Format
 

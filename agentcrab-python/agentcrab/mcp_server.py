@@ -1,8 +1,7 @@
 """agentCrab MCP Server — expose Polymarket trading tools via Model Context Protocol.
 
 Start with:
-    agentcrab-mcp                              # stdio (Claude Code, local agents)
-    agentcrab-mcp --transport streamable-http   # HTTP (Claude web, ChatGPT, remote)
+    agentcrab-mcp   # stdio transport (Claude Code, Cursor, local agents)
 
 Optional: set AGENTCRAB_PRIVATE_KEY env var, or use connect_wallet / create_wallet tools.
 """
@@ -46,12 +45,14 @@ def _error(e: Exception, tool_name: str = "") -> str:
     if isinstance(e, AgentCrabError):
         log.warning("tool=%s error=%s msg=%s", tool_name, e.error_code, e)
         return json.dumps({"error": e.error_code or "ERROR", "message": str(e)})
+    # Log full details to stderr but return generic message to MCP output
+    # to avoid leaking internal paths, hostnames, or connection strings.
     log.error("tool=%s unexpected: %s", tool_name, e)
-    return json.dumps({"error": "INTERNAL_ERROR", "message": str(e)})
+    return json.dumps({"error": "INTERNAL_ERROR", "message": "An internal error occurred. Check server logs for details."})
 
 
-def create_server(host: str = "0.0.0.0", port: int = 8000):
-    """Create and return a configured FastMCP server instance."""
+def create_server():
+    """Create and return a configured FastMCP server instance (stdio only)."""
     try:
         from mcp.server.fastmcp import FastMCP
     except ImportError:
@@ -66,8 +67,6 @@ def create_server(host: str = "0.0.0.0", port: int = 8000):
 
     mcp = FastMCP(
         "agentcrab",
-        host=host,
-        port=port,
         instructions=(
             "agentCrab gives you full access to Polymarket prediction markets. "
             "You can search markets, check prices, buy/sell shares, manage positions, "
@@ -140,14 +139,17 @@ def create_server(host: str = "0.0.0.0", port: int = 8000):
 
     @mcp.tool()
     def create_wallet() -> str:
-        """Create a brand new wallet. Returns the address and private key.
+        """Create a brand new wallet locally. Returns the address and private key.
+
+        Generated entirely on your machine — the private key never leaves this
+        process and is never sent to any server.
 
         The wallet works on both BSC (for payments) and Polygon (for trading).
         After creation, the wallet needs to be funded with USDT + BNB on BSC.
         The wallet is automatically connected after creation.
         """
         try:
-            result = AgentCrab.create_wallet(_api_url)
+            result = AgentCrab.create_wallet()
             pk = result.get("private_key", "")
             if pk:
                 client = _init_client(pk)
@@ -933,19 +935,12 @@ def create_server(host: str = "0.0.0.0", port: int = 8000):
 
 
 def main():
-    """CLI entry point for the agentCrab MCP server."""
+    """CLI entry point for the agentCrab MCP server (stdio only)."""
     import argparse
 
     parser = argparse.ArgumentParser(
         description="agentCrab MCP Server — Polymarket trading tools for AI agents",
     )
-    parser.add_argument(
-        "--transport", default="stdio",
-        choices=["stdio", "streamable-http"],
-        help="MCP transport (default: stdio)",
-    )
-    parser.add_argument("--host", default="0.0.0.0", help="HTTP host (default: 0.0.0.0)")
-    parser.add_argument("--port", type=int, default=8000, help="HTTP port (default: 8000)")
     parser.add_argument("--log-level", default="INFO", help="Log level (default: INFO)")
     args = parser.parse_args()
 
@@ -956,9 +951,9 @@ def main():
         stream=sys.stderr,
     )
 
-    server = create_server(host=args.host, port=args.port)
-    log.info("starting transport=%s", args.transport)
-    server.run(transport=args.transport)
+    server = create_server()
+    log.info("starting transport=stdio")
+    server.run(transport="stdio")
 
 
 if __name__ == "__main__":
