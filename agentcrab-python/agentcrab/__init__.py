@@ -1,6 +1,6 @@
 """agentcrab — Python SDK for the agentCrab Polymarket API."""
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 from .client import AgentCrab
 from ._exceptions import (
