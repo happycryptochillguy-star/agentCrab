@@ -679,12 +679,18 @@ async def post_signed_order(
     )
     headers["Content-Type"] = "application/json"
 
+    logger.info("CLOB order body: %s", body[:500])
+    logger.info("CLOB order headers (auth): POLY_ADDRESS=%s POLY_API_KEY=%s", headers.get("POLY_ADDRESS"), headers.get("POLY_API_KEY", "")[:8])
+
     client = get_proxy_client()
     resp = await client.post(
         f"{settings.clob_api_url}/order",
         headers=headers,
         content=body,
     )
+
+    logger.info("CLOB response: status=%s body=%s", resp.status_code, resp.text[:500])
+
     _raise_clob_error(resp, "Submit order")
     return resp.json()
 

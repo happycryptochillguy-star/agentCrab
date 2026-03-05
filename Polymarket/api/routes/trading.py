@@ -701,6 +701,11 @@ async def submit_order(
             passphrase=creds["passphrase"],
             eoa_address=wallet_address,
         )
+    except HTTPException:
+        # CLOB returned a structured error via _raise_clob_error — refund and re-raise
+        await balance_svc.refund(wallet_address, settings.payment_amount_wei, "/trading/submit-order")
+        payment_svc.invalidate_balance_cache(wallet_address)
+        raise
     except httpx.HTTPStatusError as e:
         # Refund the deducted balance on CLOB rejection
         await balance_svc.refund(wallet_address, settings.payment_amount_wei, "/trading/submit-order")
