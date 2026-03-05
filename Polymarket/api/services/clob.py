@@ -680,10 +680,29 @@ async def post_signed_order(
     The clob_order comes from build_order_typed_data's clob_order field.
     Signature is the EIP-712 signature from the agent.
     """
-    clob_order["signature"] = _adjust_sig_for_safe(signature)
+    # Build the order dict matching the exact format the CLOB expects.
+    # py-clob-client sends numeric fields as ints and side as int (0=BUY, 1=SELL).
+    side_val = clob_order.get("side", "BUY")
+    side_int = 0 if side_val in ("BUY", 0) else 1
+
+    order_payload = {
+        "salt": int(clob_order["salt"]),
+        "maker": clob_order["maker"],
+        "signer": clob_order["signer"],
+        "taker": clob_order["taker"],
+        "tokenId": str(clob_order["tokenId"]),
+        "makerAmount": int(clob_order["makerAmount"]),
+        "takerAmount": int(clob_order["takerAmount"]),
+        "expiration": int(clob_order.get("expiration", "0")),
+        "nonce": int(clob_order.get("nonce", "0")),
+        "feeRateBps": int(clob_order.get("feeRateBps", "0")),
+        "side": side_int,
+        "signatureType": int(clob_order.get("signatureType", 2)),
+        "signature": _adjust_sig_for_safe(signature),
+    }
 
     body_dict = {
-        "order": clob_order,
+        "order": order_payload,
         "owner": api_key,
         "orderType": order_type,
     }
@@ -762,8 +781,23 @@ async def post_signed_orders_batch(
     try:
         batch_body = []
         for item in signed_orders:
-            order = dict(item["clob_order"])
-            order["signature"] = _adjust_sig_for_safe(item["signature"])
+            co = item["clob_order"]
+            sv = co.get("side", "BUY")
+            order = {
+                "salt": int(co["salt"]),
+                "maker": co["maker"],
+                "signer": co["signer"],
+                "taker": co["taker"],
+                "tokenId": str(co["tokenId"]),
+                "makerAmount": int(co["makerAmount"]),
+                "takerAmount": int(co["takerAmount"]),
+                "expiration": int(co.get("expiration", "0")),
+                "nonce": int(co.get("nonce", "0")),
+                "feeRateBps": int(co.get("feeRateBps", "0")),
+                "side": 0 if sv in ("BUY", 0) else 1,
+                "signatureType": int(co.get("signatureType", 2)),
+                "signature": _adjust_sig_for_safe(item["signature"]),
+            }
             batch_body.append({
                 "order": order,
                 "owner": api_key,
