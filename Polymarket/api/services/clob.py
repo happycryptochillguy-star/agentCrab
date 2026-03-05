@@ -650,6 +650,22 @@ async def build_order_typed_data(
     }
 
 
+def _adjust_sig_for_safe(signature: str) -> str:
+    """Adjust EIP-712 signature v value for Gnosis Safe (signatureType=2).
+
+    Polymarket's CTF Exchange expects v+4 for Safe owner signatures
+    to distinguish them from regular EOA signatures (v=27/28 → v=31/32).
+    This matches the py-clob-client behavior.
+    """
+    sig_bytes = bytes.fromhex(signature.removeprefix("0x"))
+    if len(sig_bytes) != 65:
+        return signature
+    r, s, v = sig_bytes[:32], sig_bytes[32:64], sig_bytes[64]
+    if v in (27, 28):
+        v += 4
+    return "0x" + (r + s + bytes([v])).hex()
+
+
 async def post_signed_order(
     clob_order: dict,
     signature: str,
@@ -664,7 +680,7 @@ async def post_signed_order(
     The clob_order comes from build_order_typed_data's clob_order field.
     Signature is the EIP-712 signature from the agent.
     """
-    clob_order["signature"] = signature
+    clob_order["signature"] = _adjust_sig_for_safe(signature)
 
     body_dict = {
         "order": clob_order,
@@ -747,7 +763,7 @@ async def post_signed_orders_batch(
         batch_body = []
         for item in signed_orders:
             order = dict(item["clob_order"])
-            order["signature"] = item["signature"]
+            order["signature"] = _adjust_sig_for_safe(item["signature"])
             batch_body.append({
                 "order": order,
                 "owner": api_key,
