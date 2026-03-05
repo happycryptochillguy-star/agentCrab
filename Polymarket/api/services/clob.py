@@ -451,8 +451,12 @@ async def derive_api_credentials(
 
 
 def _generate_salt() -> int:
-    """Generate random salt for order uniqueness."""
-    return random.randint(1, 2**128)
+    """Generate random salt for order uniqueness.
+
+    Matches py-order-utils: round(timestamp * random()).
+    Must fit in int64 for Go's JSON decoder on the CLOB side.
+    """
+    return round(time.time() * random.random())
 
 
 def _round_down(val: float, decimals: int) -> float:
@@ -650,22 +654,6 @@ async def build_order_typed_data(
     }
 
 
-def _adjust_sig_for_safe(signature: str) -> str:
-    """Adjust EIP-712 signature v value for Gnosis Safe (signatureType=2).
-
-    Polymarket's CTF Exchange expects v+4 for Safe owner signatures
-    to distinguish them from regular EOA signatures (v=27/28 → v=31/32).
-    This matches the py-clob-client behavior.
-    """
-    sig_bytes = bytes.fromhex(signature.removeprefix("0x"))
-    if len(sig_bytes) != 65:
-        return signature
-    r, s, v = sig_bytes[:32], sig_bytes[32:64], sig_bytes[64]
-    if v in (27, 28):
-        v += 4
-    return "0x" + (r + s + bytes([v])).hex()
-
-
 async def post_signed_order(
     clob_order: dict,
     signature: str,
@@ -680,31 +668,15 @@ async def post_signed_order(
     The clob_order comes from build_order_typed_data's clob_order field.
     Signature is the EIP-712 signature from the agent.
     """
-    # Build the order dict matching the exact format the CLOB expects.
-    # py-clob-client sends numeric fields as ints and side as int (0=BUY, 1=SELL).
-    side_val = clob_order.get("side", "BUY")
-    side_int = 0 if side_val in ("BUY", 0) else 1
-
-    order_payload = {
-        "salt": int(clob_order["salt"]),
-        "maker": clob_order["maker"],
-        "signer": clob_order["signer"],
-        "taker": clob_order["taker"],
-        "tokenId": str(clob_order["tokenId"]),
-        "makerAmount": int(clob_order["makerAmount"]),
-        "takerAmount": int(clob_order["takerAmount"]),
-        "expiration": int(clob_order.get("expiration", "0")),
-        "nonce": int(clob_order.get("nonce", "0")),
-        "feeRateBps": int(clob_order.get("feeRateBps", "0")),
-        "side": side_int,
-        "signatureType": int(clob_order.get("signatureType", 2)),
-        "signature": _adjust_sig_for_safe(signature),
-    }
+    # Build order payload matching py-clob-client's order_to_json exactly:
+    # salt=int, signatureType=int, everything else=str, side="BUY"/"SELL"
+    clob_order["signature"] = signature
 
     body_dict = {
-        "order": order_payload,
+        "order": clob_order,
         "owner": api_key,
         "orderType": order_type,
+        "postOnly": False,
     }
     # Compact JSON with no spaces — must match SDK for HMAC to verify
     body = _json.dumps(body_dict, separators=(",", ":"), ensure_ascii=False)
@@ -781,27 +753,13 @@ async def post_signed_orders_batch(
     try:
         batch_body = []
         for item in signed_orders:
-            co = item["clob_order"]
-            sv = co.get("side", "BUY")
-            order = {
-                "salt": int(co["salt"]),
-                "maker": co["maker"],
-                "signer": co["signer"],
-                "taker": co["taker"],
-                "tokenId": str(co["tokenId"]),
-                "makerAmount": int(co["makerAmount"]),
-                "takerAmount": int(co["takerAmount"]),
-                "expiration": int(co.get("expiration", "0")),
-                "nonce": int(co.get("nonce", "0")),
-                "feeRateBps": int(co.get("feeRateBps", "0")),
-                "side": 0 if sv in ("BUY", 0) else 1,
-                "signatureType": int(co.get("signatureType", 2)),
-                "signature": _adjust_sig_for_safe(item["signature"]),
-            }
+            order = dict(item["clob_order"])
+            order["signature"] = item["signature"]
             batch_body.append({
                 "order": order,
                 "owner": api_key,
                 "orderType": item.get("order_type", "GTC"),
+                "postOnly": False,
             })
 
         body = _json.dumps(batch_body, separators=(",", ":"), ensure_ascii=False)
