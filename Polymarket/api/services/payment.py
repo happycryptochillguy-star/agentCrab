@@ -122,8 +122,9 @@ async def verify_signature(wallet_address: str, message: str, signature: str) ->
         if not is_valid_address(wallet_address):
             return False
         # Check timestamp freshness
+        # Supports: "agentcrab:{ts}" (legacy) and "agentcrab:{ts}:{nonce}" (v0.4+)
         parts = message.split(":")
-        if len(parts) != 2 or parts[0] != "agentcrab":
+        if len(parts) not in (2, 3) or parts[0] != "agentcrab":
             return False
 
         ts = int(parts[1])
@@ -343,24 +344,26 @@ def build_deposit_txs(wallet_address: str, amount_wei: int) -> list[dict]:
     # Check if approve is needed
     current_allowance = usdt.functions.allowance(wallet, contract_addr).call()
     if current_allowance < amount_wei:
+        approve_gas = usdt.functions.approve(contract_addr, amount_wei).estimate_gas({"from": wallet})
         approve_tx = usdt.functions.approve(
             contract_addr, amount_wei
         ).build_transaction({
             "from": wallet,
             "nonce": nonce,
-            "gas": 60000,
+            "gas": int(approve_gas * 1.2),
             "gasPrice": gas_price,
             "chainId": BSC_CHAIN_ID,
         })
         txs.append({"step": "approve", "description": "Approve USDT spending", "transaction": approve_tx})
         nonce += 1
 
+    deposit_gas = contract.functions.deposit(amount_wei).estimate_gas({"from": wallet})
     deposit_tx = contract.functions.deposit(
         amount_wei
     ).build_transaction({
         "from": wallet,
         "nonce": nonce,
-        "gas": 120000,
+        "gas": int(deposit_gas * 1.2),
         "gasPrice": gas_price,
         "chainId": BSC_CHAIN_ID,
     })
@@ -385,22 +388,24 @@ def build_pay_tx(wallet_address: str) -> list[dict]:
     current_allowance = usdt.functions.allowance(wallet, contract_addr).call()
     if current_allowance < amount:
         # Approve 100x to avoid repeating
+        approve_gas = usdt.functions.approve(contract_addr, amount * 100).estimate_gas({"from": wallet})
         approve_tx = usdt.functions.approve(
             contract_addr, amount * 100
         ).build_transaction({
             "from": wallet,
             "nonce": nonce,
-            "gas": 60000,
+            "gas": int(approve_gas * 1.2),
             "gasPrice": gas_price,
             "chainId": BSC_CHAIN_ID,
         })
         txs.append({"step": "approve", "description": "Approve USDT spending", "transaction": approve_tx})
         nonce += 1
 
+    pay_gas = contract.functions.pay().estimate_gas({"from": wallet})
     pay_tx = contract.functions.pay().build_transaction({
         "from": wallet,
         "nonce": nonce,
-        "gas": 120000,
+        "gas": int(pay_gas * 1.2),
         "gasPrice": gas_price,
         "chainId": BSC_CHAIN_ID,
     })
@@ -418,12 +423,13 @@ def build_usdt_transfer_tx(wallet_address: str, to_address: str, amount_wei: int
     nonce = w3.eth.get_transaction_count(wallet)
     gas_price = w3.eth.gas_price
 
+    transfer_gas = usdt.functions.transfer(to_addr, amount_wei).estimate_gas({"from": wallet})
     transfer_tx = usdt.functions.transfer(
         to_addr, amount_wei
     ).build_transaction({
         "from": wallet,
         "nonce": nonce,
-        "gas": 60000,
+        "gas": int(transfer_gas * 1.2),
         "gasPrice": gas_price,
         "chainId": BSC_CHAIN_ID,
     })
@@ -451,11 +457,13 @@ def build_polygon_approval_txs(wallet_address: str) -> list[dict]:
         (POLYGON_CTF_EXCHANGE, "CTF Exchange"),
         (POLYGON_NEG_RISK_CTF_EXCHANGE, "Neg Risk CTF Exchange"),
     ]:
+        spender_addr = Web3.to_checksum_address(spender)
+        gas_est = usdc.functions.approve(spender_addr, max_uint256).estimate_gas({"from": wallet})
         tx = usdc.functions.approve(
-            Web3.to_checksum_address(spender), max_uint256
+            spender_addr, max_uint256
         ).build_transaction({
             "from": wallet, "nonce": nonce,
-            "gas": 60000, "gasPrice": gas_price,
+            "gas": int(gas_est * 1.2), "gasPrice": gas_price,
             "chainId": POLYGON_CHAIN_ID,
         })
         txs.append({"step": f"approve_usdc_{name.lower().replace(' ', '_')}",
@@ -472,11 +480,13 @@ def build_polygon_approval_txs(wallet_address: str) -> list[dict]:
         (POLYGON_NEG_RISK_CTF_EXCHANGE, "Neg Risk CTF Exchange"),
         (POLYGON_NEG_RISK_ADAPTER, "Neg Risk Adapter"),
     ]:
+        spender_addr = Web3.to_checksum_address(spender)
+        gas_est = ctf.functions.setApprovalForAll(spender_addr, True).estimate_gas({"from": wallet})
         tx = ctf.functions.setApprovalForAll(
-            Web3.to_checksum_address(spender), True
+            spender_addr, True
         ).build_transaction({
             "from": wallet, "nonce": nonce,
-            "gas": 60000, "gasPrice": gas_price,
+            "gas": int(gas_est * 1.2), "gasPrice": gas_price,
             "chainId": POLYGON_CHAIN_ID,
         })
         txs.append({"step": f"approve_ctf_{name.lower().replace(' ', '_')}",
@@ -547,12 +557,13 @@ def build_polygon_usdc_transfer_tx(
     nonce = w3.eth.get_transaction_count(wallet)
     gas_price = w3.eth.gas_price
 
+    transfer_gas = usdc.functions.transfer(to_addr, amount_wei).estimate_gas({"from": wallet})
     transfer_tx = usdc.functions.transfer(
         to_addr, amount_wei
     ).build_transaction({
         "from": wallet,
         "nonce": nonce,
-        "gas": 60000,
+        "gas": int(transfer_gas * 1.2),
         "gasPrice": gas_price,
         "chainId": POLYGON_CHAIN_ID,
     })

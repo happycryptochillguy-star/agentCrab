@@ -1,9 +1,14 @@
 """EIP-191 authentication header building."""
 
+import os
 import time
 
 from eth_account import Account
 from eth_account.messages import encode_defunct
+
+# Monotonic counter to avoid signature collisions within the same second.
+# When the server supports nonce-based messages (v0.4+), this is not needed.
+_last_ts: int = 0
 
 
 def build_auth_headers(
@@ -14,8 +19,16 @@ def build_auth_headers(
     """Build authentication headers for API requests.
 
     Signs ``agentcrab:{unix_timestamp}`` with EIP-191 personal_sign.
+    Waits if the timestamp hasn't advanced to avoid signature replay rejection.
     """
+    global _last_ts
     ts = int(time.time())
+    if ts <= _last_ts:
+        # Wait for the next second to guarantee a unique signature
+        time.sleep(_last_ts - ts + 1)
+        ts = int(time.time())
+    _last_ts = ts
+
     message = f"agentcrab:{ts}"
     sig = Account.sign_message(
         encode_defunct(text=message),

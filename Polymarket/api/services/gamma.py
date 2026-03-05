@@ -135,6 +135,8 @@ _TAG_KEYWORDS: dict[str, str] = {
     "election": "elections", "elections": "elections",
     "fed": "fed", "federal reserve": "fed",
     "ai": "ai", "openai": "openai",
+    "weather": "weather", "temperature": "weather", "rain": "weather",
+    "snow": "weather", "hurricane": "weather", "earthquake": "weather",
 }
 
 

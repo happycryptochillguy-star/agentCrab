@@ -44,3 +44,6 @@ dist/
 test_*.py
 *_test.py
 tests/
+
+# Bots (local trading — keys, DBs, strategies)
+bots/
