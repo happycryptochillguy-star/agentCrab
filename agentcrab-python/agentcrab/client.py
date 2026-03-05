@@ -599,11 +599,17 @@ class AgentCrab:
         credentials first; if cached, Safe and approvals are already done,
         so we skip all on-chain checks (saves 2 API roundtrips).
         """
+        import logging
+        import time as _time
+        _log = logging.getLogger("agentcrab.setup")
         steps: list[str] = []
 
         # Step 0: Try cached credentials first (free).
         # If cached, Safe + approvals are guaranteed complete — early return.
+        _log.info("[0/4] Checking cached credentials...")
+        t0 = _time.monotonic()
         cached = self._fetch_cached_credentials()
+        _log.info("[0/4] Cached check done in %.1fs — %s", _time.monotonic() - t0, "HIT" if cached else "MISS")
         if cached:
             self._l2_creds = cached
             self._setup_done = True
@@ -617,28 +623,43 @@ class AgentCrab:
             )
 
         # Step 1: Deploy Safe (if needed)
+        _log.info("[1/4] Preparing Safe deploy...")
+        t1 = _time.monotonic()
         prep_safe = self._http.post("/trading/prepare-deploy-safe")
         safe_data = _extract_data(prep_safe)
         safe_address = safe_data.get("safe_address", "")
+        _log.info("[1/4] prepare-deploy-safe done in %.1fs — safe=%s already_deployed=%s",
+                  _time.monotonic() - t1, safe_address[:16] if safe_address else "?",
+                  safe_data.get("already_deployed"))
 
         if not safe_data.get("already_deployed"):
+            _log.info("[1/4] Deploying Safe (on-chain relay — may take up to 3 min)...")
+            t1b = _time.monotonic()
             typed_data = safe_data["typed_data"]
             sig = sign_typed_data(self._private_key, typed_data)
             self._http.post(
                 "/trading/submit-deploy-safe",
                 json={"signature": sig},
                 paid=True,
+                timeout=180.0,
             )
+            _log.info("[1/4] Safe deployed in %.1fs", _time.monotonic() - t1b)
             steps.append("safe_deployed")
         else:
             steps.append("safe_already_deployed")
 
         # Step 2: Prepare enable (approvals + CLOB auth)
+        _log.info("[2/4] Preparing enable (approvals + CLOB auth)...")
+        t2 = _time.monotonic()
         prep_enable = self._http.post("/trading/prepare-enable")
         enable_data = _extract_data(prep_enable)
+        _log.info("[2/4] prepare-enable done in %.1fs — approvals_needed=%s",
+                  _time.monotonic() - t2, enable_data.get("approvals_needed"))
 
         # Step 3: Submit approvals (if needed)
         if enable_data.get("approvals_needed") and enable_data.get("approval_data"):
+            _log.info("[3/4] Submitting approvals (on-chain — may take up to 3 min)...")
+            t3 = _time.monotonic()
             approval_data = enable_data["approval_data"]
             safe_tx_hash = approval_data["hash"]
             sig = sign_safe_tx_hash(self._private_key, safe_tx_hash)
@@ -646,12 +667,17 @@ class AgentCrab:
                 "/trading/submit-approvals",
                 json={"signature": sig, "approval_data": approval_data},
                 paid=True,
+                timeout=180.0,
             )
+            _log.info("[3/4] Approvals submitted in %.1fs", _time.monotonic() - t3)
             steps.append("approvals_submitted")
         else:
+            _log.info("[3/4] Approvals already set, skipping")
             steps.append("approvals_already_set")
 
         # Step 4: Derive new credentials
+        _log.info("[4/4] Deriving L2 credentials...")
+        t4 = _time.monotonic()
         clob_typed_data = enable_data["clob_typed_data"]
         timestamp = clob_typed_data["message"]["timestamp"]
         sig = sign_typed_data(self._private_key, clob_typed_data)
@@ -661,6 +687,7 @@ class AgentCrab:
             paid=True,
         )
         creds_data = _extract_data(creds_resp)
+        _log.info("[4/4] Credentials derived in %.1fs", _time.monotonic() - t4)
         steps.append("credentials_derived")
 
         # New server returns credentials_cached=True (no creds in response).

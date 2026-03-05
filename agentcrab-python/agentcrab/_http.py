@@ -119,13 +119,17 @@ class HttpTransport:
         auth: bool = True,
         paid: bool = False,
         l2_creds: dict | None = None,
+        timeout: float | None = None,
     ) -> Any:
         """Send GET request. Returns parsed JSON body."""
         headers = self._auth_headers() if (auth or paid) else {}
         if l2_creds:
             headers.update(build_l2_headers(**l2_creds))
         try:
-            resp = self._client.get(path, params=params, headers=headers)
+            kwargs: dict = {"params": params, "headers": headers}
+            if timeout is not None:
+                kwargs["timeout"] = timeout
+            resp = self._client.get(path, **kwargs)
         except httpx.HTTPError as e:
             raise NetworkError(message=str(e)) from e
         self._check_version(resp)
@@ -142,13 +146,17 @@ class HttpTransport:
         auth: bool = True,
         paid: bool = False,
         l2_creds: dict | None = None,
+        timeout: float | None = None,
     ) -> Any:
         """Send POST request. Returns parsed JSON body."""
         headers = self._auth_headers() if (auth or paid) else {}
         if l2_creds:
             headers.update(build_l2_headers(**l2_creds))
         try:
-            resp = self._client.post(path, json=json, headers=headers)
+            kwargs: dict = {"json": json, "headers": headers}
+            if timeout is not None:
+                kwargs["timeout"] = timeout
+            resp = self._client.post(path, **kwargs)
         except httpx.HTTPError as e:
             raise NetworkError(message=str(e)) from e
         self._check_version(resp)
